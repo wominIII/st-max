@@ -15,6 +15,8 @@ const defaultSettings = {
     positionX: 16,
     positionY: 16,
     displayStyle: 'vertical',
+    contextColor: '#0a4069',
+    promptColor: '#f1c40f',
     maxTokens: 8192,
     contextMessages: 20,
 };
@@ -42,18 +44,22 @@ function ensureSettings() {
     settings.positionX = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     settings.positionY = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
     settings.displayStyle = ['vertical', 'horizontal'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
+    settings.contextColor = sanitizeColor(settings.contextColor, defaultSettings.contextColor);
+    settings.promptColor = sanitizeColor(settings.promptColor, defaultSettings.promptColor);
     settings.maxTokens = sanitizeInteger(settings.maxTokens, defaultSettings.maxTokens, 1);
     settings.contextMessages = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
 
     Object.assign(extension_settings[MODULE_ID], settings);
 }
 
-function saveSetting(key, value) {
+function saveSetting(key, value, { probe = false } = {}) {
     settings[key] = value;
     Object.assign(extension_settings[MODULE_ID], settings);
     saveSettingsDebounced();
     scheduleRefresh(0);
-    schedulePromptPacketProbe();
+    if (probe) {
+        schedulePromptPacketProbe();
+    }
 }
 
 function scheduleRefresh(delay = 120) {
@@ -146,6 +152,7 @@ function createBarFaces() {
 function ensureWidget() {
     let widget = document.getElementById('stctx_token_meter');
     if (widget) {
+        applyWidgetAppearance(widget);
         applyWidgetPlacement(widget);
         return widget;
     }
@@ -153,7 +160,7 @@ function ensureWidget() {
     widget = document.createElement('div');
     widget.id = 'stctx_token_meter';
     widget.className = 'stctx-token-meter';
-    widget.dataset.style = settings.displayStyle;
+    applyWidgetAppearance(widget);
     widget.innerHTML = `
         <div class="stctx-token-meter-inner container">
             <div class="chart grid" data-role="chart" aria-label="Token progress">
@@ -201,11 +208,17 @@ function ensureSettingsUi() {
                         <option value="horizontal">横条</option>
                     </select>
 
-                    <label for="stctx_meter_position_x">X 坐标</label>
-                    <input id="stctx_meter_position_x" class="text_pole" type="number" min="0" step="1">
+                    <label for="stctx_meter_position_x">X 坐标：<span data-role="position-x-value">0</span></label>
+                    <input id="stctx_meter_position_x" class="stctx-range" type="range" min="0" step="1">
 
-                    <label for="stctx_meter_position_y">Y 坐标</label>
-                    <input id="stctx_meter_position_y" class="text_pole" type="number" min="0" step="1">
+                    <label for="stctx_meter_position_y">Y 坐标：<span data-role="position-y-value">0</span></label>
+                    <input id="stctx_meter_position_y" class="stctx-range" type="range" min="0" step="1">
+
+                    <label for="stctx_meter_context_color">上下文颜色</label>
+                    <input id="stctx_meter_context_color" class="stctx-color-input" type="color">
+
+                    <label for="stctx_meter_prompt_color">发送包颜色</label>
+                    <input id="stctx_meter_prompt_color" class="stctx-color-input" type="color">
 
                     <label for="stctx_meter_max_tokens">最高 token</label>
                     <input id="stctx_meter_max_tokens" class="text_pole" type="number" min="1" step="1">
@@ -213,7 +226,7 @@ function ensureSettingsUi() {
                     <label for="stctx_meter_context_messages">读取最近消息数</label>
                     <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1">
                 </div>
-                <div class="stctx-settings-help">X/Y 是相对窗口左上角的像素坐标。横条样式会变成很窄的长条，更适合手机输入区上方。</div>
+                <div class="stctx-settings-help">拖动 X/Y 滑条可以实时移动进度条。横条样式会变成很窄的长条，更适合手机输入区上方。</div>
             </div>
         </div>
     `;
@@ -223,8 +236,14 @@ function ensureSettingsUi() {
     const styleSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_style'));
     const positionXInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_x'));
     const positionYInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_y'));
+    const positionXValue = panel.querySelector('[data-role="position-x-value"]');
+    const positionYValue = panel.querySelector('[data-role="position-y-value"]');
+    const contextColorInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_context_color'));
+    const promptColorInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_prompt_color'));
     const maxTokensInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_max_tokens'));
     const contextMessagesInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_context_messages'));
+
+    syncPositionSliderLimits(panel);
 
     if (styleSelect) {
         styleSelect.value = settings.displayStyle;
@@ -236,19 +255,45 @@ function ensureSettingsUi() {
 
     if (positionXInput) {
         positionXInput.value = String(settings.positionX);
-        positionXInput.addEventListener('change', () => {
+        if (positionXValue) {
+            positionXValue.textContent = String(settings.positionX);
+        }
+        positionXInput.addEventListener('input', () => {
             const value = sanitizeInteger(positionXInput.value, defaultSettings.positionX, 0);
             positionXInput.value = String(value);
+            if (positionXValue) {
+                positionXValue.textContent = String(value);
+            }
             saveSetting('positionX', value);
         });
     }
 
     if (positionYInput) {
         positionYInput.value = String(settings.positionY);
-        positionYInput.addEventListener('change', () => {
+        if (positionYValue) {
+            positionYValue.textContent = String(settings.positionY);
+        }
+        positionYInput.addEventListener('input', () => {
             const value = sanitizeInteger(positionYInput.value, defaultSettings.positionY, 0);
             positionYInput.value = String(value);
+            if (positionYValue) {
+                positionYValue.textContent = String(value);
+            }
             saveSetting('positionY', value);
+        });
+    }
+
+    if (contextColorInput) {
+        contextColorInput.value = settings.contextColor;
+        contextColorInput.addEventListener('input', () => {
+            saveSetting('contextColor', sanitizeColor(contextColorInput.value, defaultSettings.contextColor));
+        });
+    }
+
+    if (promptColorInput) {
+        promptColorInput.value = settings.promptColor;
+        promptColorInput.addEventListener('input', () => {
+            saveSetting('promptColor', sanitizeColor(promptColorInput.value, defaultSettings.promptColor));
         });
     }
 
@@ -282,6 +327,21 @@ function scheduleSettingsUiRetry() {
     }, 500);
 }
 
+function syncPositionSliderLimits(root = document) {
+    const xInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_x'));
+    const yInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_y'));
+
+    if (xInput) {
+        xInput.max = String(Math.max(window.innerWidth, settings.positionX, 1));
+        xInput.value = String(settings.positionX);
+    }
+
+    if (yInput) {
+        yInput.max = String(Math.max(window.innerHeight, settings.positionY, 1));
+        yInput.value = String(settings.positionY);
+    }
+}
+
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
@@ -293,6 +353,11 @@ function sanitizeInteger(value, fallback, min) {
     }
 
     return Math.max(min, parsed);
+}
+
+function sanitizeColor(value, fallback) {
+    const color = String(value || '').trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
 }
 
 function formatNumber(value) {
@@ -504,7 +569,14 @@ function paintStack(widget, stats) {
     stack.querySelector('.stctx-total-marker')?.classList.toggle('is-active', totalRatio > 0);
 }
 
+function applyWidgetAppearance(widget) {
+    widget.dataset.style = settings.displayStyle;
+    widget.style.setProperty('--stctx-context-color', settings.contextColor);
+    widget.style.setProperty('--stctx-prompt-color', settings.promptColor);
+}
+
 function applyWidgetPlacement(widget) {
+    applyWidgetAppearance(widget);
     widget.dataset.style = settings.displayStyle;
     const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : 78);
     const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : 132);
@@ -604,8 +676,14 @@ function bindEvents() {
         scheduleRefresh(80);
         schedulePromptPacketProbe(PROMPT_PROBE_INPUT_DEBOUNCE);
     });
-    window.addEventListener('resize', () => scheduleRefresh(0));
-    window.addEventListener('orientationchange', () => scheduleRefresh(0));
+    window.addEventListener('resize', () => {
+        syncPositionSliderLimits();
+        scheduleRefresh(0);
+    });
+    window.addEventListener('orientationchange', () => {
+        syncPositionSliderLimits();
+        scheduleRefresh(0);
+    });
 }
 
 jQuery(() => {
