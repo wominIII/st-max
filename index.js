@@ -1,6 +1,7 @@
-import { extension_settings, getContext, saveSettingsDebounced } from '../../../extensions.js';
+import { extension_settings, getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../events.js';
 import { itemizedPrompts } from '../../../itemized-prompts.js';
+import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'context-token-meter';
 const SEGMENT_COUNT = 4;
