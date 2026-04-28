@@ -74,15 +74,25 @@ function ensureWidget() {
     const colorClasses = ['navy', 'yellow', 'red'];
     for (let i = 0; i < SEGMENT_COUNT; i++) {
         const segment = document.createElement('div');
-        segment.className = `bar lightGray-face ${colorClasses[i]}`;
+        segment.className = 'stctx-segment';
         segment.dataset.index = String(i);
         segment.innerHTML = `
-            <div class="face top"><div class="growing-bar"></div></div>
-            <div class="face side-0"><div class="growing-bar"></div></div>
-            <div class="face floor"><div class="growing-bar"></div></div>
-            <div class="face side-a"></div>
-            <div class="face side-b"></div>
-            <div class="face side-1"><div class="growing-bar"></div></div>
+            <div class="bar bar-track lightGray-face" aria-hidden="true">
+                <div class="face top"><div class="growing-bar"></div></div>
+                <div class="face side-0"><div class="growing-bar"></div></div>
+                <div class="face floor"><div class="growing-bar"></div></div>
+                <div class="face side-a"></div>
+                <div class="face side-b"></div>
+                <div class="face side-1"><div class="growing-bar"></div></div>
+            </div>
+            <div class="bar bar-fill ${colorClasses[i]}" aria-hidden="true">
+                <div class="face top"><div class="growing-bar"></div></div>
+                <div class="face side-0"><div class="growing-bar"></div></div>
+                <div class="face floor"><div class="growing-bar"></div></div>
+                <div class="face side-a"></div>
+                <div class="face side-b"></div>
+                <div class="face side-1"><div class="growing-bar"></div></div>
+            </div>
         `;
         exercise.append(segment);
     }
@@ -267,13 +277,14 @@ async function buildStats() {
 }
 
 function paintSegments(widget, ratio) {
-    const segments = widget.querySelectorAll('.bar');
+    const segments = widget.querySelectorAll('.stctx-segment');
     segments.forEach((segment, index) => {
         const segmentStart = index / SEGMENT_COUNT;
         const segmentFill = clamp((ratio - segmentStart) * SEGMENT_COUNT, 0, 1);
-        segment.style.setProperty('--stctx-fill', `${Math.round(segmentFill * 100)}%`);
-        segment.classList.toggle('is-active', segmentFill > 0);
-        segment.classList.toggle('is-full', segmentFill >= 0.999);
+        const fillBar = segment.querySelector('.bar-fill');
+        segment.style.setProperty('--stctx-scale', String(segmentFill));
+        fillBar?.classList.toggle('is-active', segmentFill > 0);
+        fillBar?.classList.toggle('is-full', segmentFill >= 0.999);
     });
 }
 
