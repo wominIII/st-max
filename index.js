@@ -77,9 +77,8 @@ function ensureWidget() {
                 <div class="exercise second">
                     <div class="stctx-stacked-progress" data-role="stack">
                         <div class="bar bar-track lightGray-face" aria-hidden="true">${createBarFaces()}</div>
-                        <div class="bar bar-fill stctx-total-fill red" aria-hidden="true">${createBarFaces()}</div>
-                        <div class="bar bar-fill stctx-context-fill navy" aria-hidden="true">${createBarFaces()}</div>
-                        <div class="bar bar-fill stctx-input-fill yellow" aria-hidden="true">${createBarFaces()}</div>
+                        <div class="bar bar-fill stctx-stack-fill" aria-hidden="true">${createBarFaces()}</div>
+                        <div class="stctx-total-marker" aria-hidden="true"></div>
                     </div>
                 </div>
             </div>
@@ -283,19 +282,16 @@ function paintStack(widget, stats) {
         return;
     }
 
-    const contextRatio = clamp(stats.contextTokens / stats.maxTokens, 0, 1);
-    const inputRatio = clamp(stats.inputTokens / stats.maxTokens, 0, Math.max(0, 1 - contextRatio));
     const totalRatio = clamp(stats.totalTokens / stats.maxTokens, 0, 1);
+    const contextStop = stats.totalTokens > 0 ? clamp(stats.contextTokens / stats.totalTokens, 0, 1) * 100 : 0;
 
-    stack.style.setProperty('--stctx-context-scale', String(contextRatio));
-    stack.style.setProperty('--stctx-input-scale', String(inputRatio));
-    stack.style.setProperty('--stctx-input-bottom', `${contextRatio * 14}em`);
     stack.style.setProperty('--stctx-total-scale', String(totalRatio));
+    stack.style.setProperty('--stctx-context-stop', `${contextStop}%`);
+    stack.style.setProperty('--stctx-marker-bottom', `${totalRatio * 14}em`);
 
-    stack.querySelector('.stctx-context-fill')?.classList.toggle('is-active', contextRatio > 0);
-    stack.querySelector('.stctx-input-fill')?.classList.toggle('is-active', inputRatio > 0);
-    stack.querySelector('.stctx-total-fill')?.classList.toggle('is-active', totalRatio > 0);
-    stack.querySelector('.stctx-total-fill')?.classList.toggle('is-full', totalRatio >= 0.999);
+    stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-active', totalRatio > 0);
+    stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-full', totalRatio >= 0.999);
+    stack.querySelector('.stctx-total-marker')?.classList.toggle('is-active', totalRatio > 0);
 }
 
 function applyWidgetPlacement(widget) {
