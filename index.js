@@ -149,34 +149,15 @@ function ensureWidget() {
     widget.className = 'stctx-token-meter';
     widget.innerHTML = `
         <div class="stctx-token-meter-inner container">
-            <div class="stctx-token-meter-header">
-                <div class="stctx-token-meter-title">Token Progress</div>
-                <span class="stctx-token-meter-percent" data-role="percent">0%</span>
-            </div>
             <div class="chart grid" data-role="chart" aria-label="Token progress">
                 <div class="exercise second">
-                    <div class="stctx-stacked-progress" data-role="stack">
+                    <div class="stctx-stacked-progress" data-role="stack" title="等待 token 数据">
                         <div class="bar bar-track lightGray-face" aria-hidden="true">${createBarFaces()}</div>
                         <div class="bar bar-fill stctx-stack-fill" aria-hidden="true">${createBarFaces()}</div>
                         <div class="stctx-total-marker" aria-hidden="true"></div>
                     </div>
                 </div>
             </div>
-            <div class="stctx-token-meter-legend">
-                <div class="stctx-token-meter-row stctx-context-row">
-                    <span>上下文</span>
-                    <strong data-role="context-value">0</strong>
-                </div>
-                <div class="stctx-token-meter-row stctx-input-row">
-                    <span>发送包</span>
-                    <strong data-role="input-value">0</strong>
-                </div>
-                <div class="stctx-token-meter-row stctx-total-row">
-                    <span>合计</span>
-                    <strong data-role="total-value">0</strong>
-                </div>
-            </div>
-            <div class="stctx-token-meter-note" data-role="note">上限 8,192 · 最近 20 条</div>
         </div>
     `;
 
@@ -498,8 +479,8 @@ function applyWidgetPlacement(widget) {
     }
 
     const rect = sendForm.getBoundingClientRect();
-    const width = widget.offsetWidth || 180;
-    const height = widget.offsetHeight || 210;
+    const width = widget.offsetWidth || 78;
+    const height = widget.offsetHeight || 132;
 
     let left = rect.left + ((rect.width - width) / 2);
     let top = rect.top - height - POSITION_GAP;
@@ -538,11 +519,16 @@ function renderStats(widget, stats) {
     }
 
     widget.dataset.level = stats.level;
-    widget.querySelector('[data-role="context-value"]').textContent = formatNumber(stats.contextTokens);
-    widget.querySelector('[data-role="input-value"]').textContent = formatNumber(stats.inputTokens);
-    widget.querySelector('[data-role="total-value"]').textContent = `${formatNumber(stats.totalTokens)} / ${formatNumber(stats.maxTokens)}`;
-    widget.querySelector('[data-role="percent"]').textContent = `${stats.percent}%`;
-    widget.querySelector('[data-role="note"]').textContent = `上限 ${formatNumber(stats.maxTokens)} · 最近 ${formatNumber(stats.contextMessages)} 条 · ${stats.promptSource}`;
+    const stack = widget.querySelector('[data-role="stack"]');
+    if (stack) {
+        stack.setAttribute('title', [
+            `上下文: ${formatNumber(stats.contextTokens)}`,
+            `发送包: ${formatNumber(stats.inputTokens)}`,
+            `合计: ${formatNumber(stats.totalTokens)} / ${formatNumber(stats.maxTokens)} (${stats.percent}%)`,
+            `最近消息: ${formatNumber(stats.contextMessages)} 条`,
+            `来源: ${stats.promptSource}`,
+        ].join('\n'));
+    }
     paintStack(widget, stats);
     lastRenderKey = stats.key;
     requestAnimationFrame(() => applyWidgetPlacement(widget));

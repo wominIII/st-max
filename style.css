@@ -3,7 +3,7 @@
 .stctx-token-meter {
     position: fixed;
     z-index: 40000;
-    width: 12.5rem;
+    width: 4.9rem;
     pointer-events: none;
     font-family: 'Open Sans', sans-serif;
     color: #444;
@@ -12,42 +12,13 @@
 .stctx-token-meter-inner {
     z-index: 1;
     display: flex;
-    overflow: hidden;
+    overflow: visible;
     flex-direction: column;
     justify-content: center;
-    gap: 0.28rem;
-    padding: 0.7rem 0.78rem 0.65rem;
-    border-radius: 0.95rem;
-    background:
-        radial-gradient(circle at 48% 38%, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.06) 26%, transparent 58%),
-        linear-gradient(145deg, rgba(246, 242, 235, 0.82), rgba(196, 190, 183, 0.58));
-    box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.28) inset,
-        0 0.9rem 1.8rem rgba(0, 0, 0, 0.24),
-        0 0.35rem 1rem rgba(255, 255, 255, 0.18) inset;
-    backdrop-filter: blur(7px);
-}
-
-.stctx-token-meter-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.5rem;
-}
-
-.stctx-token-meter-title {
-    font-size: 0.92rem;
-    font-weight: 700;
-    line-height: 1;
-    color: #514632;
-    letter-spacing: 0.01em;
-}
-
-.stctx-token-meter-percent {
-    font-size: 0.78rem;
-    font-weight: 700;
-    line-height: 1;
-    color: rgba(68, 68, 68, 0.86);
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
 }
 
 .stctx-token-meter .chart {
@@ -55,7 +26,8 @@
     perspective: 1000px;
     perspective-origin: 50% 50%;
     backface-visibility: visible;
-    min-height: 8.9rem;
+    min-height: 8.2rem;
+    pointer-events: auto;
 }
 
 .stctx-token-meter .chart.grid {
@@ -76,6 +48,7 @@
     width: 6.8em;
     height: 14em;
     margin: 0.35em auto 0.95em;
+    cursor: help;
     --stctx-total-scale: 0;
     --stctx-context-stop: 0%;
     --stctx-marker-bottom: 0em;
@@ -223,74 +196,6 @@
     opacity: 0;
 }
 
-.stctx-token-meter-legend {
-    display: grid;
-    gap: 0.18rem;
-    font-variant-numeric: tabular-nums;
-}
-
-.stctx-token-meter-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.65rem;
-    font-size: 0.74rem;
-    line-height: 1.15;
-}
-
-.stctx-token-meter-row span {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    color: rgba(68, 68, 68, 0.78);
-}
-
-.stctx-token-meter-row span::before {
-    content: '';
-    width: 0.48rem;
-    height: 0.48rem;
-    border-radius: 999px;
-    box-shadow: 0 0 0.65rem currentColor;
-}
-
-.stctx-context-row span::before {
-    background: #0a4069;
-    color: #0a4069;
-}
-
-.stctx-input-row span::before {
-    background: #f1c40f;
-    color: #f1c40f;
-}
-
-.stctx-total-row span::before {
-    background: #ec008c;
-    color: #ec008c;
-}
-
-.stctx-token-meter-row strong {
-    font-size: 0.78rem;
-    color: #4f4a45;
-}
-
-.stctx-token-meter-note {
-    margin-top: 0.1rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 0.68rem;
-    line-height: 1.1;
-    color: rgba(68, 68, 68, 0.72);
-}
-
-.stctx-token-meter[data-level='warning'] .stctx-token-meter-percent {
-    color: #ad7c00;
-}
-
-.stctx-token-meter[data-level='danger'] .stctx-token-meter-percent {
-    color: #c90060;
-}
-
 .stctx-token-meter-settings .inline-drawer-content {
     padding: 0.75rem;
 }
@@ -310,22 +215,18 @@
 
 @media (max-width: 900px) {
     .stctx-token-meter {
-        width: 12.6rem;
+        width: 4.6rem;
     }
 }
 
 @media (max-width: 640px) {
     .stctx-token-meter {
-        width: 11.5rem;
+        width: 4.3rem;
     }
 
     .stctx-token-meter .chart {
         font-size: 0.43rem;
         min-height: 7.4rem;
-    }
-
-    .stctx-token-meter-note {
-        display: none;
     }
 
     .stctx-settings-grid {
