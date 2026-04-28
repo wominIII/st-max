@@ -1,0 +1,272 @@
+import { getContext } from '../../../extensions.js';
+import { eventSource, event_types } from '../../../events.js';
+import { itemizedPrompts } from '../../../itemized-prompts.js';
+
+const MODULE_ID = 'context-token-meter';
+const SEGMENT_COUNT = 4;
+const REFRESH_INTERVAL = 2000;
+
+let refreshTimer = null;
+let periodicTimer = null;
+let lastRenderKey = '';
+let isGenerating = false;
+
+function scheduleRefresh(delay = 120) {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+        refreshWidget().catch(error => console.warn(`[${MODULE_ID}] Refresh failed`, error));
+    }, delay);
+}
+
+function ensureWidget() {
+    const rightSendForm = document.getElementById('rightSendForm');
+    if (!rightSendForm) {
+        return null;
+    }
+
+    let widget = document.getElementById('stctx_token_meter');
+    if (widget) {
+        return widget;
+    }
+
+    widget = document.createElement('div');
+    widget.id = 'stctx_token_meter';
+    widget.className = 'stctx-token-meter';
+    widget.innerHTML = `
+        <div class="stctx-token-meter-inner">
+            <div class="stctx-token-meter-header">
+                <div class="stctx-token-meter-text">
+                    <span class="stctx-token-meter-value" data-role="value">0</span>
+                    <span class="stctx-token-meter-limit" data-role="limit">/ 0</span>
+                </div>
+                <span class="stctx-token-meter-percent" data-role="percent">0%</span>
+            </div>
+            <div class="stctx-token-meter-chart" data-role="chart" aria-hidden="true"></div>
+            <div class="stctx-token-meter-note" data-role="note">等待上下文</div>
+        </div>
+    `;
+
+    const chart = widget.querySelector('[data-role="chart"]');
+    for (let i = 0; i < SEGMENT_COUNT; i++) {
+        const segment = document.createElement('div');
+        segment.className = 'stctx-segment';
+        segment.dataset.index = String(i);
+        segment.innerHTML = `
+            <div class="stctx-face stctx-top"><div class="stctx-liquid"></div></div>
+            <div class="stctx-face stctx-side-0"><div class="stctx-liquid"></div></div>
+            <div class="stctx-face stctx-floor"><div class="stctx-liquid"></div></div>
+            <div class="stctx-face stctx-side-a"></div>
+            <div class="stctx-face stctx-side-b"></div>
+            <div class="stctx-face stctx-side-1"><div class="stctx-liquid"></div></div>
+        `;
+        chart.append(segment);
+    }
+
+    rightSendForm.prepend(widget);
+    return widget;
+}
+
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function formatNumber(value) {
+    return new Intl.NumberFormat('zh-CN').format(Math.max(0, Math.round(Number(value) || 0)));
+}
+
+function getUsageLevel(ratio) {
+    if (ratio >= 0.9) {
+        return 'danger';
+    }
+
+    if (ratio >= 0.7) {
+        return 'warning';
+    }
+
+    if (ratio >= 0.45) {
+        return 'mid';
+    }
+
+    return 'safe';
+}
+
+function getMaxContext(context, latestPrompt) {
+    if (latestPrompt?.main_api === 'openai' || context.mainApi === 'openai') {
+        const maxContext = Number(context.chatCompletionSettings?.openai_max_context || 0);
+        const maxResponse = Number(context.chatCompletionSettings?.openai_max_tokens || 0);
+        return Math.max(1, maxContext - maxResponse);
+    }
+
+    if (latestPrompt?.this_max_context) {
+        return Math.max(1, Number(latestPrompt.this_max_context));
+    }
+
+    return Math.max(1, Number(context.maxContext || 0));
+}
+
+function getLatestPrompt() {
+    if (!Array.isArray(itemizedPrompts) || itemizedPrompts.length === 0) {
+        return null;
+    }
+
+    return itemizedPrompts[itemizedPrompts.length - 1] ?? null;
+}
+
+function getLastUserMessage(context) {
+    const messages = Array.isArray(context.chat) ? context.chat : [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i];
+        if (message?.is_user && !message?.is_system) {
+            return String(message.mes || '').trim();
+        }
+    }
+
+    return '';
+}
+
+async function getFallbackTokenCount(context, draft) {
+    const messages = (Array.isArray(context.chat) ? context.chat : [])
+        .filter(message => message?.mes && !message?.is_system)
+        .map(message => String(message.mes));
+
+    const lastUserMessage = getLastUserMessage(context);
+    if (draft && draft !== lastUserMessage) {
+        messages.push(draft);
+    }
+
+    const text = messages.join('\n');
+    return text ? await context.getTokenCountAsync(text) : 0;
+}
+
+async function buildStats() {
+    const context = getContext();
+    const latestPrompt = getLatestPrompt();
+    const textarea = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('send_textarea'));
+    const draft = String(textarea?.value || '').trim();
+    const maxTokens = getMaxContext(context, latestPrompt);
+
+    let usedTokens = 0;
+    let note = '按最近一次实际上下文计算';
+    let source = 'prompt-cache';
+
+    if (latestPrompt) {
+        if (latestPrompt.main_api === 'openai') {
+            usedTokens = Number(latestPrompt.oaiTotalTokens || 0);
+        } else if (latestPrompt.finalPrompt) {
+            usedTokens = await context.getTokenCountAsync(String(latestPrompt.finalPrompt));
+        }
+    }
+
+    if (!usedTokens) {
+        usedTokens = await getFallbackTokenCount(context, draft);
+        note = '按当前聊天内容估算';
+        source = 'chat-fallback';
+    }
+
+    let draftTokens = 0;
+    const lastUserMessage = getLastUserMessage(context);
+    if (!isGenerating && draft && draft !== lastUserMessage) {
+        draftTokens = await context.getTokenCountAsync(draft);
+        usedTokens += draftTokens;
+        note = latestPrompt ? `包含当前输入预估 +${draftTokens}` : '聊天内容 + 当前输入估算';
+        source += '+draft';
+    }
+
+    const ratio = clamp(maxTokens > 0 ? usedTokens / maxTokens : 0, 0, 1.25);
+    const percent = Math.round(clamp(ratio, 0, 1) * 100);
+
+    return {
+        usedTokens,
+        maxTokens,
+        percent,
+        note,
+        source,
+        level: getUsageLevel(ratio),
+        key: [
+            latestPrompt?.mesId ?? 'none',
+            latestPrompt?.oaiTotalTokens ?? 'no-oai-total',
+            latestPrompt?.finalPrompt?.length ?? 'no-final',
+            draft,
+            maxTokens,
+            usedTokens,
+            source,
+        ].join('|'),
+    };
+}
+
+function paintSegments(widget, ratio) {
+    const segments = widget.querySelectorAll('.stctx-segment');
+    segments.forEach((segment, index) => {
+        const segmentStart = index / SEGMENT_COUNT;
+        const segmentFill = clamp((ratio - segmentStart) * SEGMENT_COUNT, 0, 1);
+        segment.style.setProperty('--stctx-fill', `${Math.round(segmentFill * 100)}%`);
+        segment.classList.toggle('is-active', segmentFill > 0);
+        segment.classList.toggle('is-full', segmentFill >= 0.999);
+    });
+}
+
+function renderStats(widget, stats) {
+    if (lastRenderKey === stats.key && widget.dataset.level === stats.level) {
+        return;
+    }
+
+    widget.dataset.level = stats.level;
+    widget.querySelector('[data-role="value"]').textContent = formatNumber(stats.usedTokens);
+    widget.querySelector('[data-role="limit"]').textContent = `/ ${formatNumber(stats.maxTokens)}`;
+    widget.querySelector('[data-role="percent"]').textContent = `${stats.percent}%`;
+    widget.querySelector('[data-role="note"]').textContent = stats.note;
+    paintSegments(widget, stats.maxTokens > 0 ? stats.usedTokens / stats.maxTokens : 0);
+    lastRenderKey = stats.key;
+}
+
+async function refreshWidget() {
+    const widget = ensureWidget();
+    if (!widget) {
+        return;
+    }
+
+    const stats = await buildStats();
+    renderStats(widget, stats);
+}
+
+function bindEvents() {
+    const watchedEvents = [
+        event_types.APP_READY,
+        event_types.CHAT_CHANGED,
+        event_types.MESSAGE_RECEIVED,
+        event_types.MESSAGE_UPDATED,
+        event_types.MESSAGE_DELETED,
+        event_types.USER_MESSAGE_RENDERED,
+        event_types.CHARACTER_MESSAGE_RENDERED,
+        event_types.GENERATION_STARTED,
+        event_types.GENERATION_ENDED,
+        event_types.GENERATION_STOPPED,
+        event_types.SETTINGS_UPDATED,
+        event_types.MAIN_API_CHANGED,
+        event_types.CHATCOMPLETION_SOURCE_CHANGED,
+        event_types.CHATCOMPLETION_MODEL_CHANGED,
+    ];
+
+    watchedEvents.forEach(eventName => eventSource.on(eventName, () => scheduleRefresh()));
+    eventSource.on(event_types.GENERATION_STARTED, () => {
+        isGenerating = true;
+    });
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        isGenerating = false;
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        isGenerating = false;
+    });
+
+    $(document).on('input', '#send_textarea', () => scheduleRefresh(80));
+}
+
+jQuery(() => {
+    ensureWidget();
+    bindEvents();
+    scheduleRefresh(0);
+
+    periodicTimer = setInterval(() => {
+        scheduleRefresh(0);
+    }, REFRESH_INTERVAL);
+});
