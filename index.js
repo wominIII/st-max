@@ -43,7 +43,7 @@ function ensureSettings() {
     Object.assign(settings, defaultSettings, extension_settings[MODULE_ID]);
     settings.positionX = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     settings.positionY = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
-    settings.displayStyle = ['vertical', 'horizontal'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
+    settings.displayStyle = ['vertical', 'horizontal', 'verticalSlim'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
     settings.contextColor = sanitizeColor(settings.contextColor, defaultSettings.contextColor);
     settings.promptColor = sanitizeColor(settings.promptColor, defaultSettings.promptColor);
     settings.maxTokens = sanitizeInteger(settings.maxTokens, defaultSettings.maxTokens, 1);
@@ -206,6 +206,7 @@ function ensureSettingsUi() {
                     <select id="stctx_meter_style" class="text_pole">
                         <option value="vertical">竖条</option>
                         <option value="horizontal">横条</option>
+                        <option value="verticalSlim">竖向长条</option>
                     </select>
 
                     <label for="stctx_meter_position_x">X 坐标：<span data-role="position-x-value">0</span></label>
@@ -248,7 +249,7 @@ function ensureSettingsUi() {
     if (styleSelect) {
         styleSelect.value = settings.displayStyle;
         styleSelect.addEventListener('change', () => {
-            const value = ['vertical', 'horizontal'].includes(styleSelect.value) ? styleSelect.value : defaultSettings.displayStyle;
+            const value = ['vertical', 'horizontal', 'verticalSlim'].includes(styleSelect.value) ? styleSelect.value : defaultSettings.displayStyle;
             saveSetting('displayStyle', value);
         });
     }
@@ -578,8 +579,8 @@ function applyWidgetAppearance(widget) {
 function applyWidgetPlacement(widget) {
     applyWidgetAppearance(widget);
     widget.dataset.style = settings.displayStyle;
-    const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : 78);
-    const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : 132);
+    const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : settings.displayStyle === 'verticalSlim' ? 12 : 78);
+    const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : settings.displayStyle === 'verticalSlim' ? 224 : 132);
     let left = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     let top = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
 

@@ -15,6 +15,10 @@
     width: min(94vw, 52rem);
 }
 
+.stctx-token-meter[data-style='verticalSlim'] {
+    width: 0.9rem;
+}
+
 .stctx-token-meter-inner {
     z-index: 1;
     display: flex;
@@ -245,6 +249,60 @@
     transform: translateX(-0.08rem);
 }
 
+.stctx-token-meter[data-style='verticalSlim'] .chart {
+    font-size: 1rem;
+    min-height: 14rem;
+    perspective: none;
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .stctx-stacked-progress {
+    width: 0.42rem;
+    height: 14rem;
+    margin: 0;
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .bar {
+    inset: 0;
+    height: 100%;
+    transform: none;
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .bar-fill {
+    transform-origin: center bottom;
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .stctx-stack-fill {
+    transform: scaleY(var(--stctx-total-scale));
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .bar .face.side-1 {
+    display: block;
+    border-radius: 999px;
+    box-shadow:
+        0 0 0 0.12rem rgba(255, 255, 255, 0.15) inset,
+        0.12rem 0 0.45rem rgba(0, 0, 0, 0.22);
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .stctx-stack-fill .growing-bar {
+    background:
+        linear-gradient(
+            to top,
+            var(--stctx-context-color) 0%,
+            var(--stctx-context-color) var(--stctx-context-stop),
+            var(--stctx-prompt-color) var(--stctx-context-stop),
+            var(--stctx-prompt-color) 100%
+        );
+}
+
+.stctx-token-meter[data-style='verticalSlim'] .stctx-total-marker {
+    left: -0.08rem;
+    right: auto;
+    bottom: var(--stctx-marker-bottom, 0em);
+    width: 0.58rem;
+    height: 0.16rem;
+    transform: translateY(-0.08rem);
+}
+
 .stctx-token-meter .chart .bar.lightGray-face .face {
     background-color: rgba(170, 170, 170, 0.2);
 }
@@ -289,6 +347,10 @@
     .stctx-token-meter[data-style='horizontal'] {
         width: min(94vw, 42rem);
     }
+
+    .stctx-token-meter[data-style='verticalSlim'] {
+        width: 0.9rem;
+    }
 }
 
 @media (max-width: 640px) {
@@ -298,6 +360,10 @@
 
     .stctx-token-meter[data-style='horizontal'] {
         width: calc(100vw - 32px);
+    }
+
+    .stctx-token-meter[data-style='verticalSlim'] {
+        width: 0.8rem;
     }
 
     .stctx-token-meter .chart {
