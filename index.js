@@ -4,7 +4,7 @@ import { itemizedPrompts } from '../../../itemized-prompts.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'context-token-meter';
-const SEGMENT_COUNT = 4;
+const SEGMENT_COUNT = 3;
 const REFRESH_INTERVAL = 2000;
 const POSITION_GAP = 12;
 const VIEWPORT_PADDING = 8;
@@ -54,33 +54,37 @@ function ensureWidget() {
     widget.id = 'stctx_token_meter';
     widget.className = 'stctx-token-meter';
     widget.innerHTML = `
-        <div class="stctx-token-meter-inner">
+        <div class="stctx-token-meter-inner container">
             <div class="stctx-token-meter-header">
-                <div class="stctx-token-meter-text">
-                    <span class="stctx-token-meter-value" data-role="value">0</span>
-                    <span class="stctx-token-meter-limit" data-role="limit">/ 0</span>
-                </div>
+                <div class="stctx-token-meter-title">Context Tokens</div>
                 <span class="stctx-token-meter-percent" data-role="percent">0%</span>
             </div>
-            <div class="stctx-token-meter-chart" data-role="chart" aria-hidden="true"></div>
+            <div class="stctx-token-meter-text">
+                <span class="stctx-token-meter-value" data-role="value">0</span>
+                <span class="stctx-token-meter-limit" data-role="limit">/ 0</span>
+            </div>
+            <div class="chart grid" data-role="chart" aria-hidden="true">
+                <div class="exercise second" data-role="exercise"></div>
+            </div>
             <div class="stctx-token-meter-note" data-role="note">等待上下文</div>
         </div>
     `;
 
-    const chart = widget.querySelector('[data-role="chart"]');
+    const exercise = widget.querySelector('[data-role="exercise"]');
+    const colorClasses = ['navy', 'yellow', 'red'];
     for (let i = 0; i < SEGMENT_COUNT; i++) {
         const segment = document.createElement('div');
-        segment.className = 'stctx-segment';
+        segment.className = `bar lightGray-face ${colorClasses[i]}`;
         segment.dataset.index = String(i);
         segment.innerHTML = `
-            <div class="stctx-face stctx-top"><div class="stctx-liquid"></div></div>
-            <div class="stctx-face stctx-side-0"><div class="stctx-liquid"></div></div>
-            <div class="stctx-face stctx-floor"><div class="stctx-liquid"></div></div>
-            <div class="stctx-face stctx-side-a"></div>
-            <div class="stctx-face stctx-side-b"></div>
-            <div class="stctx-face stctx-side-1"><div class="stctx-liquid"></div></div>
+            <div class="face top"><div class="growing-bar"></div></div>
+            <div class="face side-0"><div class="growing-bar"></div></div>
+            <div class="face floor"><div class="growing-bar"></div></div>
+            <div class="face side-a"></div>
+            <div class="face side-b"></div>
+            <div class="face side-1"><div class="growing-bar"></div></div>
         `;
-        chart.append(segment);
+        exercise.append(segment);
     }
 
     document.body.append(widget);
@@ -263,7 +267,7 @@ async function buildStats() {
 }
 
 function paintSegments(widget, ratio) {
-    const segments = widget.querySelectorAll('.stctx-segment');
+    const segments = widget.querySelectorAll('.bar');
     segments.forEach((segment, index) => {
         const segmentStart = index / SEGMENT_COUNT;
         const segmentFill = clamp((ratio - segmentStart) * SEGMENT_COUNT, 0, 1);
