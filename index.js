@@ -1,24 +1,24 @@
 import { extension_settings, getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../events.js';
-import { itemizedPrompts } from '../../../itemized-prompts.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'context-token-meter';
-const SEGMENT_COUNT = 3;
-const REFRESH_INTERVAL = 2000;
+const REFRESH_INTERVAL = 1600;
 const POSITION_GAP = 12;
 const VIEWPORT_PADDING = 8;
 
 const defaultSettings = {
     position: 'top',
+    maxTokens: 8192,
+    contextMessages: 20,
 };
 
 const settings = structuredClone(defaultSettings);
 
 let refreshTimer = null;
 let periodicTimer = null;
+let settingsUiRetryTimer = null;
 let lastRenderKey = '';
-let isGenerating = false;
 
 function ensureSettings() {
     if (!extension_settings[MODULE_ID]) {
@@ -26,6 +26,9 @@ function ensureSettings() {
     }
 
     Object.assign(settings, defaultSettings, extension_settings[MODULE_ID]);
+    settings.maxTokens = sanitizeInteger(settings.maxTokens, defaultSettings.maxTokens, 1);
+    settings.contextMessages = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
+
     Object.assign(extension_settings[MODULE_ID], settings);
 }
 
@@ -43,6 +46,17 @@ function scheduleRefresh(delay = 120) {
     }, delay);
 }
 
+function createBarFaces() {
+    return `
+        <div class="face top"><div class="growing-bar"></div></div>
+        <div class="face side-0"><div class="growing-bar"></div></div>
+        <div class="face floor"><div class="growing-bar"></div></div>
+        <div class="face side-a"></div>
+        <div class="face side-b"></div>
+        <div class="face side-1"><div class="growing-bar"></div></div>
+    `;
+}
+
 function ensureWidget() {
     let widget = document.getElementById('stctx_token_meter');
     if (widget) {
@@ -56,46 +70,36 @@ function ensureWidget() {
     widget.innerHTML = `
         <div class="stctx-token-meter-inner container">
             <div class="stctx-token-meter-header">
-                <div class="stctx-token-meter-title">Context Tokens</div>
+                <div class="stctx-token-meter-title">Token Progress</div>
                 <span class="stctx-token-meter-percent" data-role="percent">0%</span>
             </div>
-            <div class="stctx-token-meter-text">
-                <span class="stctx-token-meter-value" data-role="value">0</span>
-                <span class="stctx-token-meter-limit" data-role="limit">/ 0</span>
+            <div class="chart grid" data-role="chart" aria-label="Token progress">
+                <div class="exercise second">
+                    <div class="stctx-stacked-progress" data-role="stack">
+                        <div class="bar bar-track lightGray-face" aria-hidden="true">${createBarFaces()}</div>
+                        <div class="bar bar-fill stctx-total-fill red" aria-hidden="true">${createBarFaces()}</div>
+                        <div class="bar bar-fill stctx-context-fill navy" aria-hidden="true">${createBarFaces()}</div>
+                        <div class="bar bar-fill stctx-input-fill yellow" aria-hidden="true">${createBarFaces()}</div>
+                    </div>
+                </div>
             </div>
-            <div class="chart grid" data-role="chart" aria-hidden="true">
-                <div class="exercise second" data-role="exercise"></div>
+            <div class="stctx-token-meter-legend">
+                <div class="stctx-token-meter-row stctx-context-row">
+                    <span>上下文</span>
+                    <strong data-role="context-value">0</strong>
+                </div>
+                <div class="stctx-token-meter-row stctx-input-row">
+                    <span>输入</span>
+                    <strong data-role="input-value">0</strong>
+                </div>
+                <div class="stctx-token-meter-row stctx-total-row">
+                    <span>合计</span>
+                    <strong data-role="total-value">0</strong>
+                </div>
             </div>
-            <div class="stctx-token-meter-note" data-role="note">等待上下文</div>
+            <div class="stctx-token-meter-note" data-role="note">上限 8,192 · 最近 20 条</div>
         </div>
     `;
-
-    const exercise = widget.querySelector('[data-role="exercise"]');
-    const colorClasses = ['navy', 'yellow', 'red'];
-    for (let i = 0; i < SEGMENT_COUNT; i++) {
-        const segment = document.createElement('div');
-        segment.className = 'stctx-segment';
-        segment.dataset.index = String(i);
-        segment.innerHTML = `
-            <div class="bar bar-track lightGray-face" aria-hidden="true">
-                <div class="face top"><div class="growing-bar"></div></div>
-                <div class="face side-0"><div class="growing-bar"></div></div>
-                <div class="face floor"><div class="growing-bar"></div></div>
-                <div class="face side-a"></div>
-                <div class="face side-b"></div>
-                <div class="face side-1"><div class="growing-bar"></div></div>
-            </div>
-            <div class="bar bar-fill ${colorClasses[i]}" aria-hidden="true">
-                <div class="face top"><div class="growing-bar"></div></div>
-                <div class="face side-0"><div class="growing-bar"></div></div>
-                <div class="face floor"><div class="growing-bar"></div></div>
-                <div class="face side-a"></div>
-                <div class="face side-b"></div>
-                <div class="face side-1"><div class="growing-bar"></div></div>
-            </div>
-        `;
-        exercise.append(segment);
-    }
 
     document.body.append(widget);
     applyWidgetPlacement(widget);
@@ -107,8 +111,9 @@ function ensureSettingsUi() {
         return;
     }
 
-    const host = document.getElementById('extensions_settings2');
+    const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
     if (!host) {
+        scheduleSettingsUiRetry();
         return;
     }
 
@@ -118,7 +123,7 @@ function ensureSettingsUi() {
     panel.innerHTML = `
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>上下文 Token 条</b>
+                <b>上下文 Token 进度条</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
@@ -130,8 +135,14 @@ function ensureSettingsUi() {
                         <option value="bottom">下</option>
                         <option value="left">左</option>
                     </select>
+
+                    <label for="stctx_meter_max_tokens">最高 token</label>
+                    <input id="stctx_meter_max_tokens" class="text_pole" type="number" min="1" step="1">
+
+                    <label for="stctx_meter_context_messages">读取最近消息数</label>
+                    <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1">
                 </div>
-                <div class="stctx-settings-help">组件会以最高层浮在聊天输入区附近，避免被发送按钮和别的浮层挡住。</div>
+                <div class="stctx-settings-help">同一个竖向 3D 柱里叠加显示：上下文、输入框、合计。百分比都按“最高 token”计算。</div>
             </div>
         </div>
     `;
@@ -139,16 +150,57 @@ function ensureSettingsUi() {
     host.prepend(panel);
 
     const positionSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_position'));
+    const maxTokensInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_max_tokens'));
+    const contextMessagesInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_context_messages'));
+
     if (positionSelect) {
         positionSelect.value = settings.position;
         positionSelect.addEventListener('change', () => {
             saveSetting('position', positionSelect.value || defaultSettings.position);
         });
     }
+
+    if (maxTokensInput) {
+        maxTokensInput.value = String(settings.maxTokens);
+        maxTokensInput.addEventListener('change', () => {
+            const value = sanitizeInteger(maxTokensInput.value, defaultSettings.maxTokens, 1);
+            maxTokensInput.value = String(value);
+            saveSetting('maxTokens', value);
+        });
+    }
+
+    if (contextMessagesInput) {
+        contextMessagesInput.value = String(settings.contextMessages);
+        contextMessagesInput.addEventListener('change', () => {
+            const value = sanitizeInteger(contextMessagesInput.value, defaultSettings.contextMessages, 1);
+            contextMessagesInput.value = String(value);
+            saveSetting('contextMessages', value);
+        });
+    }
+}
+
+function scheduleSettingsUiRetry() {
+    if (settingsUiRetryTimer) {
+        return;
+    }
+
+    settingsUiRetryTimer = setTimeout(() => {
+        settingsUiRetryTimer = null;
+        ensureSettingsUi();
+    }, 500);
 }
 
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+}
+
+function sanitizeInteger(value, fallback, min) {
+    const parsed = Number.parseInt(String(value), 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.max(min, parsed);
 }
 
 function formatNumber(value) {
@@ -171,121 +223,79 @@ function getUsageLevel(ratio) {
     return 'safe';
 }
 
-function getMaxContext(context, latestPrompt) {
-    if (latestPrompt?.main_api === 'openai' || context.mainApi === 'openai') {
-        const maxContext = Number(context.chatCompletionSettings?.openai_max_context || 0);
-        const maxResponse = Number(context.chatCompletionSettings?.openai_max_tokens || 0);
-        return Math.max(1, maxContext - maxResponse);
-    }
-
-    if (latestPrompt?.this_max_context) {
-        return Math.max(1, Number(latestPrompt.this_max_context));
-    }
-
-    return Math.max(1, Number(context.maxContext || 0));
-}
-
-function getLatestPrompt() {
-    if (!Array.isArray(itemizedPrompts) || itemizedPrompts.length === 0) {
-        return null;
-    }
-
-    return itemizedPrompts[itemizedPrompts.length - 1] ?? null;
-}
-
-function getLastUserMessage(context) {
+function getRecentContextText(context) {
+    const limit = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
     const messages = Array.isArray(context.chat) ? context.chat : [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const message = messages[i];
-        if (message?.is_user && !message?.is_system) {
-            return String(message.mes || '').trim();
-        }
-    }
 
-    return '';
+    return messages
+        .filter(message => message?.mes && !message?.is_system)
+        .slice(-limit)
+        .map(message => String(message.mes).trim())
+        .filter(Boolean)
+        .join('\n');
 }
 
-async function getFallbackTokenCount(context, draft) {
-    const messages = (Array.isArray(context.chat) ? context.chat : [])
-        .filter(message => message?.mes && !message?.is_system)
-        .map(message => String(message.mes));
-
-    const lastUserMessage = getLastUserMessage(context);
-    if (draft && draft !== lastUserMessage) {
-        messages.push(draft);
-    }
-
-    const text = messages.join('\n');
-    return text ? await context.getTokenCountAsync(text) : 0;
+async function countTokens(context, text) {
+    const trimmed = String(text || '').trim();
+    return trimmed ? await context.getTokenCountAsync(trimmed) : 0;
 }
 
 async function buildStats() {
     const context = getContext();
-    const latestPrompt = getLatestPrompt();
     const textarea = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('send_textarea'));
-    const draft = String(textarea?.value || '').trim();
-    const maxTokens = getMaxContext(context, latestPrompt);
+    const inputText = String(textarea?.value || '').trim();
+    const maxTokens = sanitizeInteger(settings.maxTokens, defaultSettings.maxTokens, 1);
+    const contextMessages = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
+    const contextText = getRecentContextText(context);
 
-    let usedTokens = 0;
-    let note = '按最近一次实际上下文计算';
-    let source = 'prompt-cache';
-
-    if (latestPrompt) {
-        if (latestPrompt.main_api === 'openai') {
-            usedTokens = Number(latestPrompt.oaiTotalTokens || 0);
-        } else if (latestPrompt.finalPrompt) {
-            usedTokens = await context.getTokenCountAsync(String(latestPrompt.finalPrompt));
-        }
-    }
-
-    if (!usedTokens) {
-        usedTokens = await getFallbackTokenCount(context, draft);
-        note = '按当前聊天内容估算';
-        source = 'chat-fallback';
-    }
-
-    let draftTokens = 0;
-    const lastUserMessage = getLastUserMessage(context);
-    if (!isGenerating && draft && draft !== lastUserMessage) {
-        draftTokens = await context.getTokenCountAsync(draft);
-        usedTokens += draftTokens;
-        note = latestPrompt ? `包含当前输入预估 +${draftTokens}` : '聊天内容 + 当前输入估算';
-        source += '+draft';
-    }
-
-    const ratio = clamp(maxTokens > 0 ? usedTokens / maxTokens : 0, 0, 1.25);
-    const percent = Math.round(clamp(ratio, 0, 1) * 100);
+    const [contextTokens, inputTokens] = await Promise.all([
+        countTokens(context, contextText),
+        countTokens(context, inputText),
+    ]);
+    const totalTokens = contextTokens + inputTokens;
+    const totalRatio = maxTokens > 0 ? totalTokens / maxTokens : 0;
 
     return {
-        usedTokens,
+        contextTokens,
+        inputTokens,
+        totalTokens,
         maxTokens,
-        percent,
-        note,
-        source,
-        level: getUsageLevel(ratio),
+        contextMessages,
+        percent: Math.round(clamp(totalRatio, 0, 1) * 100),
+        level: getUsageLevel(totalRatio),
         key: [
-            latestPrompt?.mesId ?? 'none',
-            latestPrompt?.oaiTotalTokens ?? 'no-oai-total',
-            latestPrompt?.finalPrompt?.length ?? 'no-final',
-            draft,
+            context.chatId ?? 'no-chat',
+            Array.isArray(context.chat) ? context.chat.length : 0,
+            contextText.length,
+            inputText,
             maxTokens,
-            usedTokens,
-            source,
+            contextMessages,
             settings.position,
+            contextTokens,
+            inputTokens,
         ].join('|'),
     };
 }
 
-function paintSegments(widget, ratio) {
-    const segments = widget.querySelectorAll('.stctx-segment');
-    segments.forEach((segment, index) => {
-        const segmentStart = index / SEGMENT_COUNT;
-        const segmentFill = clamp((ratio - segmentStart) * SEGMENT_COUNT, 0, 1);
-        const fillBar = segment.querySelector('.bar-fill');
-        segment.style.setProperty('--stctx-scale', String(segmentFill));
-        fillBar?.classList.toggle('is-active', segmentFill > 0);
-        fillBar?.classList.toggle('is-full', segmentFill >= 0.999);
-    });
+function paintStack(widget, stats) {
+    const stack = widget.querySelector('[data-role="stack"]');
+    if (!stack) {
+        return;
+    }
+
+    const contextRatio = clamp(stats.contextTokens / stats.maxTokens, 0, 1);
+    const inputRatio = clamp(stats.inputTokens / stats.maxTokens, 0, Math.max(0, 1 - contextRatio));
+    const totalRatio = clamp(stats.totalTokens / stats.maxTokens, 0, 1);
+
+    stack.style.setProperty('--stctx-context-scale', String(contextRatio));
+    stack.style.setProperty('--stctx-input-scale', String(inputRatio));
+    stack.style.setProperty('--stctx-input-bottom', `${contextRatio * 14}em`);
+    stack.style.setProperty('--stctx-total-scale', String(totalRatio));
+
+    stack.querySelector('.stctx-context-fill')?.classList.toggle('is-active', contextRatio > 0);
+    stack.querySelector('.stctx-input-fill')?.classList.toggle('is-active', inputRatio > 0);
+    stack.querySelector('.stctx-total-fill')?.classList.toggle('is-active', totalRatio > 0);
+    stack.querySelector('.stctx-total-fill')?.classList.toggle('is-full', totalRatio >= 0.999);
 }
 
 function applyWidgetPlacement(widget) {
@@ -298,8 +308,8 @@ function applyWidgetPlacement(widget) {
     }
 
     const rect = sendForm.getBoundingClientRect();
-    const width = widget.offsetWidth || 132;
-    const height = widget.offsetHeight || 118;
+    const width = widget.offsetWidth || 180;
+    const height = widget.offsetHeight || 210;
 
     let left = rect.left + ((rect.width - width) / 2);
     let top = rect.top - height - POSITION_GAP;
@@ -338,11 +348,12 @@ function renderStats(widget, stats) {
     }
 
     widget.dataset.level = stats.level;
-    widget.querySelector('[data-role="value"]').textContent = formatNumber(stats.usedTokens);
-    widget.querySelector('[data-role="limit"]').textContent = `/ ${formatNumber(stats.maxTokens)}`;
+    widget.querySelector('[data-role="context-value"]').textContent = formatNumber(stats.contextTokens);
+    widget.querySelector('[data-role="input-value"]').textContent = formatNumber(stats.inputTokens);
+    widget.querySelector('[data-role="total-value"]').textContent = `${formatNumber(stats.totalTokens)} / ${formatNumber(stats.maxTokens)}`;
     widget.querySelector('[data-role="percent"]').textContent = `${stats.percent}%`;
-    widget.querySelector('[data-role="note"]').textContent = stats.note;
-    paintSegments(widget, stats.maxTokens > 0 ? stats.usedTokens / stats.maxTokens : 0);
+    widget.querySelector('[data-role="note"]').textContent = `上限 ${formatNumber(stats.maxTokens)} · 最近 ${formatNumber(stats.contextMessages)} 条`;
+    paintStack(widget, stats);
     lastRenderKey = stats.key;
     requestAnimationFrame(() => applyWidgetPlacement(widget));
 }
@@ -366,7 +377,6 @@ function bindEvents() {
         event_types.MESSAGE_DELETED,
         event_types.USER_MESSAGE_RENDERED,
         event_types.CHARACTER_MESSAGE_RENDERED,
-        event_types.GENERATION_STARTED,
         event_types.GENERATION_ENDED,
         event_types.GENERATION_STOPPED,
         event_types.SETTINGS_UPDATED,
@@ -375,17 +385,10 @@ function bindEvents() {
         event_types.CHATCOMPLETION_MODEL_CHANGED,
     ];
 
-    watchedEvents.forEach(eventName => eventSource.on(eventName, () => scheduleRefresh()));
-    eventSource.on(event_types.GENERATION_STARTED, () => {
-        isGenerating = true;
-    });
-    eventSource.on(event_types.GENERATION_ENDED, () => {
-        isGenerating = false;
-    });
-    eventSource.on(event_types.GENERATION_STOPPED, () => {
-        isGenerating = false;
-    });
-
+    watchedEvents.filter(Boolean).forEach(eventName => eventSource.on(eventName, () => {
+        ensureSettingsUi();
+        scheduleRefresh();
+    }));
     $(document).on('input', '#send_textarea', () => scheduleRefresh(80));
     window.addEventListener('resize', () => scheduleRefresh(0));
     window.addEventListener('orientationchange', () => scheduleRefresh(0));
