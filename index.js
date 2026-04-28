@@ -1,15 +1,39 @@
-import { getContext } from '../../../extensions.js';
+import { extension_settings, getContext, saveSettingsDebounced } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../events.js';
 import { itemizedPrompts } from '../../../itemized-prompts.js';
 
 const MODULE_ID = 'context-token-meter';
 const SEGMENT_COUNT = 4;
 const REFRESH_INTERVAL = 2000;
+const POSITION_GAP = 12;
+const VIEWPORT_PADDING = 8;
+
+const defaultSettings = {
+    position: 'top',
+};
+
+const settings = structuredClone(defaultSettings);
 
 let refreshTimer = null;
 let periodicTimer = null;
 let lastRenderKey = '';
 let isGenerating = false;
+
+function ensureSettings() {
+    if (!extension_settings[MODULE_ID]) {
+        extension_settings[MODULE_ID] = {};
+    }
+
+    Object.assign(settings, defaultSettings, extension_settings[MODULE_ID]);
+    Object.assign(extension_settings[MODULE_ID], settings);
+}
+
+function saveSetting(key, value) {
+    settings[key] = value;
+    Object.assign(extension_settings[MODULE_ID], settings);
+    saveSettingsDebounced();
+    scheduleRefresh(0);
+}
 
 function scheduleRefresh(delay = 120) {
     clearTimeout(refreshTimer);
@@ -19,13 +43,9 @@ function scheduleRefresh(delay = 120) {
 }
 
 function ensureWidget() {
-    const rightSendForm = document.getElementById('rightSendForm');
-    if (!rightSendForm) {
-        return null;
-    }
-
     let widget = document.getElementById('stctx_token_meter');
     if (widget) {
+        applyWidgetPlacement(widget);
         return widget;
     }
 
@@ -62,8 +82,54 @@ function ensureWidget() {
         chart.append(segment);
     }
 
-    rightSendForm.prepend(widget);
+    document.body.append(widget);
+    applyWidgetPlacement(widget);
     return widget;
+}
+
+function ensureSettingsUi() {
+    if (document.getElementById('stctx_token_meter_settings')) {
+        return;
+    }
+
+    const host = document.getElementById('extensions_settings2');
+    if (!host) {
+        return;
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'stctx_token_meter_settings';
+    panel.className = 'stctx-token-meter-settings';
+    panel.innerHTML = `
+        <div class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b>上下文 Token 条</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content">
+                <div class="stctx-settings-grid">
+                    <label for="stctx_meter_position">显示位置</label>
+                    <select id="stctx_meter_position" class="text_pole">
+                        <option value="top">上</option>
+                        <option value="right">右</option>
+                        <option value="bottom">下</option>
+                        <option value="left">左</option>
+                    </select>
+                </div>
+                <div class="stctx-settings-help">组件会以最高层浮在聊天输入区附近，避免被发送按钮和别的浮层挡住。</div>
+            </div>
+        </div>
+    `;
+
+    host.prepend(panel);
+
+    const positionSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_position'));
+    if (positionSelect) {
+        positionSelect.value = settings.position;
+        positionSelect.addEventListener('change', () => {
+            saveSetting('position', positionSelect.value || defaultSettings.position);
+        });
+    }
 }
 
 function clamp(value, min, max) {
@@ -190,6 +256,7 @@ async function buildStats() {
             maxTokens,
             usedTokens,
             source,
+            settings.position,
         ].join('|'),
     };
 }
@@ -205,8 +272,52 @@ function paintSegments(widget, ratio) {
     });
 }
 
+function applyWidgetPlacement(widget) {
+    const sendForm = document.getElementById('send_form');
+    if (!sendForm) {
+        widget.style.top = `${VIEWPORT_PADDING}px`;
+        widget.style.right = `${VIEWPORT_PADDING}px`;
+        widget.style.left = 'auto';
+        return;
+    }
+
+    const rect = sendForm.getBoundingClientRect();
+    const width = widget.offsetWidth || 132;
+    const height = widget.offsetHeight || 118;
+
+    let left = rect.left + ((rect.width - width) / 2);
+    let top = rect.top - height - POSITION_GAP;
+
+    switch (settings.position) {
+        case 'right':
+            left = rect.right + POSITION_GAP;
+            top = rect.top + ((rect.height - height) / 2);
+            break;
+        case 'bottom':
+            left = rect.left + ((rect.width - width) / 2);
+            top = rect.bottom + POSITION_GAP;
+            break;
+        case 'left':
+            left = rect.left - width - POSITION_GAP;
+            top = rect.top + ((rect.height - height) / 2);
+            break;
+        case 'top':
+        default:
+            left = rect.left + ((rect.width - width) / 2);
+            top = rect.top - height - POSITION_GAP;
+            break;
+    }
+
+    left = clamp(left, VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
+    top = clamp(top, VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
+
+    widget.style.left = `${Math.round(left)}px`;
+    widget.style.top = `${Math.round(top)}px`;
+}
+
 function renderStats(widget, stats) {
     if (lastRenderKey === stats.key && widget.dataset.level === stats.level) {
+        applyWidgetPlacement(widget);
         return;
     }
 
@@ -217,6 +328,7 @@ function renderStats(widget, stats) {
     widget.querySelector('[data-role="note"]').textContent = stats.note;
     paintSegments(widget, stats.maxTokens > 0 ? stats.usedTokens / stats.maxTokens : 0);
     lastRenderKey = stats.key;
+    requestAnimationFrame(() => applyWidgetPlacement(widget));
 }
 
 async function refreshWidget() {
@@ -259,9 +371,13 @@ function bindEvents() {
     });
 
     $(document).on('input', '#send_textarea', () => scheduleRefresh(80));
+    window.addEventListener('resize', () => scheduleRefresh(0));
+    window.addEventListener('orientationchange', () => scheduleRefresh(0));
 }
 
 jQuery(() => {
+    ensureSettings();
+    ensureSettingsUi();
     ensureWidget();
     bindEvents();
     scheduleRefresh(0);
