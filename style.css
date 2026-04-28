@@ -93,6 +93,21 @@
     transition: transform 0.3s ease-in-out;
 }
 
+.stctx-token-meter .bar-fill::after {
+    content: '';
+    position: absolute;
+    inset: -18%;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0.72;
+    border-radius: inherit;
+    background:
+        radial-gradient(circle at 50% 82%, color-mix(in srgb, var(--stctx-context-color) 68%, transparent), transparent 42%),
+        radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--stctx-prompt-color) 72%, transparent), transparent 48%);
+    filter: blur(0.72rem) saturate(1.3);
+    mix-blend-mode: screen;
+}
+
 .stctx-token-meter .bar .face {
     display: none;
 }
@@ -142,7 +157,9 @@
     box-shadow:
         inset 0.25rem 0 0.45rem rgba(255, 255, 255, 0.18),
         inset -0.3rem 0 0.45rem rgba(0, 0, 0, 0.2),
-        0 0 1.1rem color-mix(in srgb, var(--stctx-prompt-color) 48%, transparent);
+        0 0 0.55rem color-mix(in srgb, var(--stctx-context-color) 62%, transparent),
+        0 0 1.25rem color-mix(in srgb, var(--stctx-prompt-color) 62%, transparent),
+        0 0 2.4rem color-mix(in srgb, var(--stctx-prompt-color) 36%, transparent);
 }
 
 .stctx-token-meter .bar-fill:not(.is-active) .growing-bar {
@@ -199,7 +216,9 @@
     box-shadow:
         inset 0 0.18rem 0.32rem rgba(255, 255, 255, 0.18),
         inset 0 -0.2rem 0.3rem rgba(0, 0, 0, 0.2),
-        0 0 1rem color-mix(in srgb, var(--stctx-prompt-color) 48%, transparent);
+        0 0 0.55rem color-mix(in srgb, var(--stctx-context-color) 62%, transparent),
+        0 0 1.25rem color-mix(in srgb, var(--stctx-prompt-color) 62%, transparent),
+        0 0 2.4rem color-mix(in srgb, var(--stctx-prompt-color) 36%, transparent);
 }
 
 .stctx-token-meter[data-style='horizontal'] .stctx-total-marker {
