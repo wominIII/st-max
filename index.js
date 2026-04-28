@@ -8,11 +8,13 @@ const REFRESH_INTERVAL = 1600;
 const PROMPT_PROBE_INPUT_DEBOUNCE = 1000;
 const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
 const PROMPT_PROBE_COOLDOWN = 4000;
-const POSITION_GAP = 12;
 const VIEWPORT_PADDING = 8;
 
 const defaultSettings = {
     position: 'top',
+    positionX: 16,
+    positionY: 16,
+    displayStyle: 'vertical',
     maxTokens: 8192,
     contextMessages: 20,
 };
@@ -37,6 +39,9 @@ function ensureSettings() {
     }
 
     Object.assign(settings, defaultSettings, extension_settings[MODULE_ID]);
+    settings.positionX = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
+    settings.positionY = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
+    settings.displayStyle = ['vertical', 'horizontal'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
     settings.maxTokens = sanitizeInteger(settings.maxTokens, defaultSettings.maxTokens, 1);
     settings.contextMessages = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
 
@@ -71,6 +76,7 @@ function getPromptProbeSignature() {
         String(textarea?.value || ''),
         settings.maxTokens,
         settings.contextMessages,
+        settings.displayStyle,
     ].join('|');
 }
 
@@ -147,6 +153,7 @@ function ensureWidget() {
     widget = document.createElement('div');
     widget.id = 'stctx_token_meter';
     widget.className = 'stctx-token-meter';
+    widget.dataset.style = settings.displayStyle;
     widget.innerHTML = `
         <div class="stctx-token-meter-inner container">
             <div class="chart grid" data-role="chart" aria-label="Token progress">
@@ -188,13 +195,17 @@ function ensureSettingsUi() {
             </div>
             <div class="inline-drawer-content">
                 <div class="stctx-settings-grid">
-                    <label for="stctx_meter_position">显示位置</label>
-                    <select id="stctx_meter_position" class="text_pole">
-                        <option value="top">上</option>
-                        <option value="right">右</option>
-                        <option value="bottom">下</option>
-                        <option value="left">左</option>
+                    <label for="stctx_meter_style">进度条样式</label>
+                    <select id="stctx_meter_style" class="text_pole">
+                        <option value="vertical">竖条</option>
+                        <option value="horizontal">横条</option>
                     </select>
+
+                    <label for="stctx_meter_position_x">X 坐标</label>
+                    <input id="stctx_meter_position_x" class="text_pole" type="number" min="0" step="1">
+
+                    <label for="stctx_meter_position_y">Y 坐标</label>
+                    <input id="stctx_meter_position_y" class="text_pole" type="number" min="0" step="1">
 
                     <label for="stctx_meter_max_tokens">最高 token</label>
                     <input id="stctx_meter_max_tokens" class="text_pole" type="number" min="1" step="1">
@@ -202,21 +213,42 @@ function ensureSettingsUi() {
                     <label for="stctx_meter_context_messages">读取最近消息数</label>
                     <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1">
                 </div>
-                <div class="stctx-settings-help">同一个竖向 3D 柱里叠加显示：最近 N 条上下文、提示词查看器里的发送包 token、两者合计。百分比都按“最高 token”计算。</div>
+                <div class="stctx-settings-help">X/Y 是相对窗口左上角的像素坐标。横条样式会变成很窄的长条，更适合手机输入区上方。</div>
             </div>
         </div>
     `;
 
     host.prepend(panel);
 
-    const positionSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_position'));
+    const styleSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_style'));
+    const positionXInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_x'));
+    const positionYInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_y'));
     const maxTokensInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_max_tokens'));
     const contextMessagesInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_context_messages'));
 
-    if (positionSelect) {
-        positionSelect.value = settings.position;
-        positionSelect.addEventListener('change', () => {
-            saveSetting('position', positionSelect.value || defaultSettings.position);
+    if (styleSelect) {
+        styleSelect.value = settings.displayStyle;
+        styleSelect.addEventListener('change', () => {
+            const value = ['vertical', 'horizontal'].includes(styleSelect.value) ? styleSelect.value : defaultSettings.displayStyle;
+            saveSetting('displayStyle', value);
+        });
+    }
+
+    if (positionXInput) {
+        positionXInput.value = String(settings.positionX);
+        positionXInput.addEventListener('change', () => {
+            const value = sanitizeInteger(positionXInput.value, defaultSettings.positionX, 0);
+            positionXInput.value = String(value);
+            saveSetting('positionX', value);
+        });
+    }
+
+    if (positionYInput) {
+        positionYInput.value = String(settings.positionY);
+        positionYInput.addEventListener('change', () => {
+            const value = sanitizeInteger(positionYInput.value, defaultSettings.positionY, 0);
+            positionYInput.value = String(value);
+            saveSetting('positionY', value);
         });
     }
 
@@ -443,7 +475,9 @@ async function buildStats() {
             inputText,
             maxTokens,
             contextMessages,
-            settings.position,
+            settings.displayStyle,
+            settings.positionX,
+            settings.positionY,
             promptPacket.key,
             contextTokens,
             promptTokens,
@@ -463,6 +497,7 @@ function paintStack(widget, stats) {
     stack.style.setProperty('--stctx-total-scale', String(totalRatio));
     stack.style.setProperty('--stctx-context-stop', `${contextStop}%`);
     stack.style.setProperty('--stctx-marker-bottom', `${totalRatio * 14}em`);
+    stack.style.setProperty('--stctx-marker-left', `${totalRatio * 100}%`);
 
     stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-active', totalRatio > 0);
     stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-full', totalRatio >= 0.999);
@@ -470,40 +505,11 @@ function paintStack(widget, stats) {
 }
 
 function applyWidgetPlacement(widget) {
-    const sendForm = document.getElementById('send_form');
-    if (!sendForm) {
-        widget.style.top = `${VIEWPORT_PADDING}px`;
-        widget.style.right = `${VIEWPORT_PADDING}px`;
-        widget.style.left = 'auto';
-        return;
-    }
-
-    const rect = sendForm.getBoundingClientRect();
-    const width = widget.offsetWidth || 78;
-    const height = widget.offsetHeight || 132;
-
-    let left = rect.left + ((rect.width - width) / 2);
-    let top = rect.top - height - POSITION_GAP;
-
-    switch (settings.position) {
-        case 'right':
-            left = rect.right + POSITION_GAP;
-            top = rect.top + ((rect.height - height) / 2);
-            break;
-        case 'bottom':
-            left = rect.left + ((rect.width - width) / 2);
-            top = rect.bottom + POSITION_GAP;
-            break;
-        case 'left':
-            left = rect.left - width - POSITION_GAP;
-            top = rect.top + ((rect.height - height) / 2);
-            break;
-        case 'top':
-        default:
-            left = rect.left + ((rect.width - width) / 2);
-            top = rect.top - height - POSITION_GAP;
-            break;
-    }
+    widget.dataset.style = settings.displayStyle;
+    const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : 78);
+    const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : 132);
+    let left = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
+    let top = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
 
     left = clamp(left, VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
     top = clamp(top, VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
