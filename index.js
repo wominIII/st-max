@@ -154,7 +154,6 @@ function ensureWidget() {
                     <div class="stctx-stacked-progress" data-role="stack" title="等待 token 数据">
                         <div class="bar bar-track lightGray-face" aria-hidden="true">${createBarFaces()}</div>
                         <div class="bar bar-fill stctx-stack-fill" aria-hidden="true">${createBarFaces()}</div>
-                        <div class="stctx-liquid-cap" aria-hidden="true"></div>
                         <div class="stctx-total-marker" aria-hidden="true"></div>
                     </div>
                 </div>
@@ -467,7 +466,6 @@ function paintStack(widget, stats) {
 
     stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-active', totalRatio > 0);
     stack.querySelector('.stctx-stack-fill')?.classList.toggle('is-full', totalRatio >= 0.999);
-    stack.querySelector('.stctx-liquid-cap')?.classList.toggle('is-active', totalRatio > 0);
     stack.querySelector('.stctx-total-marker')?.classList.toggle('is-active', totalRatio > 0);
 }
 

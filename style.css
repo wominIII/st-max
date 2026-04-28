@@ -79,41 +79,12 @@
     transform: rotateX(10deg) rotateY(-24deg) scaleY(var(--stctx-total-scale));
 }
 
-.stctx-token-meter .stctx-stack-fill .top,
 .stctx-token-meter .stctx-stack-fill .floor {
     display: none;
 }
 
 .stctx-token-meter .bar-fill.is-full {
     filter: saturate(1.2) brightness(1.05);
-}
-
-.stctx-liquid-cap {
-    position: absolute;
-    left: 0.65em;
-    right: 0.65em;
-    bottom: var(--stctx-marker-bottom, 0em);
-    z-index: 5;
-    height: 1.35em;
-    opacity: 0;
-    background:
-        linear-gradient(
-            90deg,
-            rgba(10, 64, 105, 0.85) 0%,
-            rgba(10, 64, 105, 0.85) var(--stctx-context-stop),
-            rgba(241, 196, 15, 0.9) var(--stctx-context-stop),
-            rgba(241, 196, 15, 0.9) 100%
-        );
-    box-shadow:
-        0 0 1.2em rgba(241, 196, 15, 0.5),
-        -0.3em 0 1.2em rgba(10, 64, 105, 0.45);
-    transform: translateY(-0.7em) rotateX(72deg) rotateY(-24deg);
-    transform-origin: center center;
-    transition: bottom 0.3s ease-in-out, opacity 0.2s ease-in-out;
-}
-
-.stctx-liquid-cap.is-active {
-    opacity: 0.95;
 }
 
 .stctx-total-marker {
