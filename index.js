@@ -1,9 +1,13 @@
 import { extension_settings, getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../events.js';
+import { itemizedPrompts } from '../../../itemized-prompts.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
 const MODULE_ID = 'context-token-meter';
 const REFRESH_INTERVAL = 1600;
+const PROMPT_PROBE_INPUT_DEBOUNCE = 1000;
+const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
+const PROMPT_PROBE_COOLDOWN = 4000;
 const POSITION_GAP = 12;
 const VIEWPORT_PADDING = 8;
 
@@ -19,6 +23,13 @@ let refreshTimer = null;
 let periodicTimer = null;
 let settingsUiRetryTimer = null;
 let lastRenderKey = '';
+let latestPromptPacket = null;
+let promptProbeTimer = null;
+let promptProbeInFlight = false;
+let promptProbePending = false;
+let lastPromptProbeAt = 0;
+let lastPromptProbeSignature = '';
+let isRealGenerationRunning = false;
 
 function ensureSettings() {
     if (!extension_settings[MODULE_ID]) {
@@ -37,6 +48,7 @@ function saveSetting(key, value) {
     Object.assign(extension_settings[MODULE_ID], settings);
     saveSettingsDebounced();
     scheduleRefresh(0);
+    schedulePromptPacketProbe();
 }
 
 function scheduleRefresh(delay = 120) {
@@ -44,6 +56,74 @@ function scheduleRefresh(delay = 120) {
     refreshTimer = setTimeout(() => {
         refreshWidget().catch(error => console.warn(`[${MODULE_ID}] Refresh failed`, error));
     }, delay);
+}
+
+function getPromptProbeSignature() {
+    const context = getContext();
+    const textarea = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('send_textarea'));
+    const chat = Array.isArray(context.chat) ? context.chat : [];
+    const lastMessage = chat[chat.length - 1];
+
+    return [
+        context.chatId ?? 'no-chat',
+        chat.length,
+        lastMessage?.send_date ?? lastMessage?.extra?.send_date ?? '',
+        String(textarea?.value || ''),
+        settings.maxTokens,
+        settings.contextMessages,
+    ].join('|');
+}
+
+function schedulePromptPacketProbe(delay = PROMPT_PROBE_IDLE_DEBOUNCE) {
+    clearTimeout(promptProbeTimer);
+    promptProbeTimer = setTimeout(() => {
+        runPromptPacketProbe().catch(error => console.warn(`[${MODULE_ID}] Prompt probe failed`, error));
+    }, delay);
+}
+
+async function runPromptPacketProbe() {
+    if (isRealGenerationRunning) {
+        promptProbePending = true;
+        return;
+    }
+
+    const signature = getPromptProbeSignature();
+    if (signature === lastPromptProbeSignature && latestPromptPacket?.tokens > 0) {
+        return;
+    }
+
+    if (promptProbeInFlight) {
+        promptProbePending = true;
+        return;
+    }
+
+    const elapsed = Date.now() - lastPromptProbeAt;
+    if (elapsed < PROMPT_PROBE_COOLDOWN) {
+        promptProbePending = true;
+        schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN - elapsed);
+        return;
+    }
+
+    const context = getContext();
+    if (typeof context.generate !== 'function') {
+        return;
+    }
+
+    promptProbeInFlight = true;
+    promptProbePending = false;
+    lastPromptProbeAt = Date.now();
+    lastPromptProbeSignature = signature;
+
+    try {
+        await context.generate('normal', {}, true);
+    } finally {
+        promptProbeInFlight = false;
+
+        if (promptProbePending) {
+            promptProbePending = false;
+            schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN);
+        }
+    }
 }
 
 function createBarFaces() {
@@ -88,7 +168,7 @@ function ensureWidget() {
                     <strong data-role="context-value">0</strong>
                 </div>
                 <div class="stctx-token-meter-row stctx-input-row">
-                    <span>输入</span>
+                    <span>发送包</span>
                     <strong data-role="input-value">0</strong>
                 </div>
                 <div class="stctx-token-meter-row stctx-total-row">
@@ -141,7 +221,7 @@ function ensureSettingsUi() {
                     <label for="stctx_meter_context_messages">读取最近消息数</label>
                     <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1">
                 </div>
-                <div class="stctx-settings-help">同一个竖向 3D 柱里叠加显示：上下文、输入框、合计。百分比都按“最高 token”计算。</div>
+                <div class="stctx-settings-help">同一个竖向 3D 柱里叠加显示：最近 N 条上下文、提示词查看器里的发送包 token、两者合计。百分比都按“最高 token”计算。</div>
             </div>
         </div>
     `;
@@ -239,6 +319,117 @@ async function countTokens(context, text) {
     return trimmed ? await context.getTokenCountAsync(trimmed) : 0;
 }
 
+function flattenPrompt(prompt) {
+    if (Array.isArray(prompt)) {
+        return prompt
+            .map(item => typeof item === 'string' ? item : item?.content)
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    return String(prompt || '');
+}
+
+function readPromptViewerTotalFromDom() {
+    const bodyText = document.body?.innerText || '';
+    const match = bodyText.match(/总\s*token\s*数?\s*[:：]\s*([\d,]+)/i)
+        || bodyText.match(/total\s*tokens?\s*[:：]\s*([\d,]+)/i);
+
+    if (!match) {
+        return null;
+    }
+
+    const parsed = Number.parseInt(match[1].replace(/,/g, ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getLatestItemizedPrompt() {
+    if (!Array.isArray(itemizedPrompts) || itemizedPrompts.length === 0) {
+        return null;
+    }
+
+    return itemizedPrompts[itemizedPrompts.length - 1] ?? null;
+}
+
+async function getItemizedPromptTokens(context) {
+    const latestPrompt = getLatestItemizedPrompt();
+    if (!latestPrompt) {
+        return null;
+    }
+
+    const directTokenFields = [
+        latestPrompt.oaiTotalTokens,
+        latestPrompt.finalPromptTokens,
+        latestPrompt.totalTokensInPrompt,
+    ];
+    const directTokens = directTokenFields
+        .map(value => Number(value))
+        .find(value => Number.isFinite(value) && value > 0);
+
+    if (directTokens) {
+        return {
+            tokens: directTokens,
+            source: '提示词缓存',
+            key: `itemized-direct:${latestPrompt.mesId ?? 'none'}:${directTokens}`,
+        };
+    }
+
+    const promptText = flattenPrompt(latestPrompt.rawPrompt || latestPrompt.finalPrompt);
+    const tokens = await countTokens(context, promptText);
+    if (!tokens) {
+        return null;
+    }
+
+    return {
+        tokens,
+        source: '提示词缓存',
+        key: `itemized-text:${latestPrompt.mesId ?? 'none'}:${promptText.length}:${tokens}`,
+    };
+}
+
+async function getPromptPacketTokens(context) {
+    const promptViewerTokens = readPromptViewerTotalFromDom();
+    if (promptViewerTokens) {
+        return {
+            tokens: promptViewerTokens,
+            source: '提示词查看器',
+            key: `viewer:${promptViewerTokens}`,
+        };
+    }
+
+    const cachedPrompt = latestPromptPacket;
+    if (cachedPrompt?.chatId === context.chatId && cachedPrompt.tokens > 0) {
+        return cachedPrompt;
+    }
+
+    const itemized = await getItemizedPromptTokens(context);
+    if (itemized) {
+        return itemized;
+    }
+
+    return {
+        tokens: 0,
+        source: '等待提示词缓存',
+        key: 'no-prompt-packet',
+    };
+}
+
+async function cachePromptPacketFromGenerateData(generateData) {
+    const context = getContext();
+    const promptText = flattenPrompt(generateData?.prompt || generateData?.input);
+    const tokens = await countTokens(context, promptText);
+    if (!tokens) {
+        return;
+    }
+
+    latestPromptPacket = {
+        tokens,
+        source: '刚组装的发送包',
+        key: `generate-data:${context.chatId ?? 'no-chat'}:${promptText.length}:${tokens}`,
+        chatId: context.chatId,
+    };
+}
+
 async function buildStats() {
     const context = getContext();
     const textarea = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('send_textarea'));
@@ -247,19 +438,21 @@ async function buildStats() {
     const contextMessages = sanitizeInteger(settings.contextMessages, defaultSettings.contextMessages, 1);
     const contextText = getRecentContextText(context);
 
-    const [contextTokens, inputTokens] = await Promise.all([
+    const [contextTokens, promptPacket] = await Promise.all([
         countTokens(context, contextText),
-        countTokens(context, inputText),
+        getPromptPacketTokens(context),
     ]);
-    const totalTokens = contextTokens + inputTokens;
+    const promptTokens = promptPacket.tokens;
+    const totalTokens = contextTokens + promptTokens;
     const totalRatio = maxTokens > 0 ? totalTokens / maxTokens : 0;
 
     return {
         contextTokens,
-        inputTokens,
+        inputTokens: promptTokens,
         totalTokens,
         maxTokens,
         contextMessages,
+        promptSource: promptPacket.source,
         percent: Math.round(clamp(totalRatio, 0, 1) * 100),
         level: getUsageLevel(totalRatio),
         key: [
@@ -270,8 +463,9 @@ async function buildStats() {
             maxTokens,
             contextMessages,
             settings.position,
+            promptPacket.key,
             contextTokens,
-            inputTokens,
+            promptTokens,
         ].join('|'),
     };
 }
@@ -348,7 +542,7 @@ function renderStats(widget, stats) {
     widget.querySelector('[data-role="input-value"]').textContent = formatNumber(stats.inputTokens);
     widget.querySelector('[data-role="total-value"]').textContent = `${formatNumber(stats.totalTokens)} / ${formatNumber(stats.maxTokens)}`;
     widget.querySelector('[data-role="percent"]').textContent = `${stats.percent}%`;
-    widget.querySelector('[data-role="note"]').textContent = `上限 ${formatNumber(stats.maxTokens)} · 最近 ${formatNumber(stats.contextMessages)} 条`;
+    widget.querySelector('[data-role="note"]').textContent = `上限 ${formatNumber(stats.maxTokens)} · 最近 ${formatNumber(stats.contextMessages)} 条 · ${stats.promptSource}`;
     paintStack(widget, stats);
     lastRenderKey = stats.key;
     requestAnimationFrame(() => applyWidgetPlacement(widget));
@@ -382,10 +576,42 @@ function bindEvents() {
     ];
 
     watchedEvents.filter(Boolean).forEach(eventName => eventSource.on(eventName, () => {
+        if (eventName === event_types.CHAT_CHANGED) {
+            latestPromptPacket = null;
+            lastPromptProbeSignature = '';
+        }
         ensureSettingsUi();
         scheduleRefresh();
+        schedulePromptPacketProbe();
     }));
-    $(document).on('input', '#send_textarea', () => scheduleRefresh(80));
+    eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
+        if (!dryRun) {
+            isRealGenerationRunning = true;
+        }
+    });
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        isRealGenerationRunning = false;
+        if (promptProbePending) {
+            promptProbePending = false;
+            schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN);
+        }
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        isRealGenerationRunning = false;
+        if (promptProbePending) {
+            promptProbePending = false;
+            schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN);
+        }
+    });
+    eventSource.on(event_types.GENERATE_AFTER_DATA, (generateData) => {
+        cachePromptPacketFromGenerateData(generateData)
+            .then(() => scheduleRefresh(0))
+            .catch(error => console.warn(`[${MODULE_ID}] Failed to cache prompt packet`, error));
+    });
+    $(document).on('input', '#send_textarea', () => {
+        scheduleRefresh(80);
+        schedulePromptPacketProbe(PROMPT_PROBE_INPUT_DEBOUNCE);
+    });
     window.addEventListener('resize', () => scheduleRefresh(0));
     window.addEventListener('orientationchange', () => scheduleRefresh(0));
 }
@@ -396,6 +622,7 @@ jQuery(() => {
     ensureWidget();
     bindEvents();
     scheduleRefresh(0);
+    schedulePromptPacketProbe(1200);
 
     periodicTimer = setInterval(() => {
         scheduleRefresh(0);
