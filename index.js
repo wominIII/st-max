@@ -9,6 +9,8 @@ const PROMPT_PROBE_INPUT_DEBOUNCE = 1000;
 const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
 const PROMPT_PROBE_COOLDOWN = 4000;
 const VIEWPORT_PADDING = 8;
+const POSITION_PAGE_STEP = 32;
+const MAX_TOKEN_STEP = 1000;
 
 const defaultSettings = {
     position: 'top',
@@ -21,7 +23,9 @@ const defaultSettings = {
     contextMessages: 20,
 };
 
-const settings = structuredClone(defaultSettings);
+const settings = typeof structuredClone === 'function'
+    ? structuredClone(defaultSettings)
+    : JSON.parse(JSON.stringify(defaultSettings));
 
 let refreshTimer = null;
 let periodicTimer = null;
@@ -60,6 +64,14 @@ function saveSetting(key, value, { probe = false } = {}) {
     if (probe) {
         schedulePromptPacketProbe();
     }
+}
+
+function onExtensionEvent(eventName, handler) {
+    if (!eventName) {
+        return;
+    }
+
+    eventSource.on(eventName, handler);
 }
 
 function scheduleRefresh(delay = 120) {
@@ -127,7 +139,10 @@ async function runPromptPacketProbe() {
     lastPromptProbeSignature = signature;
 
     try {
-        await context.generate('normal', {}, true);
+        const generateData = await context.generate('normal', {}, true);
+        if (generateData) {
+            await cachePromptPacketFromGenerateData(generateData);
+        }
     } finally {
         promptProbeInFlight = false;
 
@@ -210,10 +225,18 @@ function ensureSettingsUi() {
                     </select>
 
                     <label for="stctx_meter_position_x">X 坐标：<span data-role="position-x-value">0</span></label>
-                    <input id="stctx_meter_position_x" class="stctx-range" type="range" min="0" step="1">
+                    <div class="stctx-range-control">
+                        <button type="button" class="stctx-step-button" data-step-target="positionX" data-step="-${POSITION_PAGE_STEP}" aria-label="X 坐标减少">−</button>
+                        <input id="stctx_meter_position_x" class="stctx-range" type="range" min="0" step="1">
+                        <button type="button" class="stctx-step-button" data-step-target="positionX" data-step="${POSITION_PAGE_STEP}" aria-label="X 坐标增加">+</button>
+                    </div>
 
                     <label for="stctx_meter_position_y">Y 坐标：<span data-role="position-y-value">0</span></label>
-                    <input id="stctx_meter_position_y" class="stctx-range" type="range" min="0" step="1">
+                    <div class="stctx-range-control">
+                        <button type="button" class="stctx-step-button" data-step-target="positionY" data-step="-${POSITION_PAGE_STEP}" aria-label="Y 坐标减少">−</button>
+                        <input id="stctx_meter_position_y" class="stctx-range" type="range" min="0" step="1">
+                        <button type="button" class="stctx-step-button" data-step-target="positionY" data-step="${POSITION_PAGE_STEP}" aria-label="Y 坐标增加">+</button>
+                    </div>
 
                     <label for="stctx_meter_context_color">上下文颜色</label>
                     <input id="stctx_meter_context_color" class="stctx-color-input" type="color">
@@ -222,10 +245,18 @@ function ensureSettingsUi() {
                     <input id="stctx_meter_prompt_color" class="stctx-color-input" type="color">
 
                     <label for="stctx_meter_max_tokens">最高 token</label>
-                    <input id="stctx_meter_max_tokens" class="text_pole" type="number" min="1" step="1">
+                    <div class="stctx-number-control">
+                        <button type="button" class="stctx-step-button" data-step-target="maxTokens" data-step="-${MAX_TOKEN_STEP}" aria-label="最高 token 减少">−</button>
+                        <input id="stctx_meter_max_tokens" class="text_pole" type="number" min="1" step="1" inputmode="numeric">
+                        <button type="button" class="stctx-step-button" data-step-target="maxTokens" data-step="${MAX_TOKEN_STEP}" aria-label="最高 token 增加">+</button>
+                    </div>
 
                     <label for="stctx_meter_context_messages">读取最近消息数</label>
-                    <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1">
+                    <div class="stctx-number-control">
+                        <button type="button" class="stctx-step-button" data-step-target="contextMessages" data-step="-1" aria-label="读取消息数减少">−</button>
+                        <input id="stctx_meter_context_messages" class="text_pole" type="number" min="1" step="1" inputmode="numeric">
+                        <button type="button" class="stctx-step-button" data-step-target="contextMessages" data-step="1" aria-label="读取消息数增加">+</button>
+                    </div>
                 </div>
                 <div class="stctx-settings-help">拖动 X/Y 滑条可以实时移动进度条。横条样式会变成很窄的长条，更适合手机输入区上方。</div>
             </div>
@@ -315,6 +346,65 @@ function ensureSettingsUi() {
             saveSetting('contextMessages', value);
         });
     }
+
+    panel.querySelectorAll('.stctx-step-button').forEach(button => {
+        button.addEventListener('click', () => {
+            const target = button.getAttribute('data-step-target');
+            const step = sanitizeInteger(button.getAttribute('data-step'), 0, Number.NEGATIVE_INFINITY);
+            applySettingsStep(target, step, panel);
+        });
+    });
+}
+
+function updateSettingsUiValues(root = document) {
+    const positionXInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_x'));
+    const positionYInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_y'));
+    const positionXValue = root.querySelector('[data-role="position-x-value"]');
+    const positionYValue = root.querySelector('[data-role="position-y-value"]');
+    const maxTokensInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_max_tokens'));
+    const contextMessagesInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_context_messages'));
+
+    if (positionXInput) {
+        positionXInput.value = String(settings.positionX);
+    }
+    if (positionYInput) {
+        positionYInput.value = String(settings.positionY);
+    }
+    if (positionXValue) {
+        positionXValue.textContent = String(settings.positionX);
+    }
+    if (positionYValue) {
+        positionYValue.textContent = String(settings.positionY);
+    }
+    if (maxTokensInput) {
+        maxTokensInput.value = String(settings.maxTokens);
+    }
+    if (contextMessagesInput) {
+        contextMessagesInput.value = String(settings.contextMessages);
+    }
+}
+
+function applySettingsStep(target, step, root = document) {
+    if (!Number.isFinite(step) || !target) {
+        return;
+    }
+
+    if (target === 'positionX' || target === 'positionY') {
+        const max = target === 'positionX'
+            ? Math.max(window.innerWidth, settings.positionX, 1)
+            : Math.max(window.innerHeight, settings.positionY, 1);
+        const value = clamp(sanitizeInteger(settings[target], defaultSettings[target], 0) + step, 0, max);
+        saveSetting(target, value);
+        syncPositionSliderLimits(root);
+        updateSettingsUiValues(root);
+        return;
+    }
+
+    if (target === 'maxTokens' || target === 'contextMessages') {
+        const value = sanitizeInteger(settings[target], defaultSettings[target], 1) + step;
+        saveSetting(target, Math.max(1, value));
+        updateSettingsUiValues(root);
+    }
 }
 
 function scheduleSettingsUiRetry() {
@@ -341,6 +431,8 @@ function syncPositionSliderLimits(root = document) {
         yInput.max = String(Math.max(window.innerHeight, settings.positionY, 1));
         yInput.value = String(settings.positionY);
     }
+
+    updateSettingsUiValues(root);
 }
 
 function clamp(value, min, max) {
@@ -584,8 +676,11 @@ function applyWidgetPlacement(widget) {
     let left = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     let top = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
 
-    left = clamp(left, VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
-    top = clamp(top, VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
+    const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
+    const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
+
+    left = clamp(left, VIEWPORT_PADDING, maxLeft);
+    top = clamp(top, VIEWPORT_PADDING, maxTop);
 
     widget.style.left = `${Math.round(left)}px`;
     widget.style.top = `${Math.round(top)}px`;
@@ -640,7 +735,7 @@ function bindEvents() {
         event_types.CHATCOMPLETION_MODEL_CHANGED,
     ];
 
-    watchedEvents.filter(Boolean).forEach(eventName => eventSource.on(eventName, () => {
+    watchedEvents.filter(Boolean).forEach(eventName => onExtensionEvent(eventName, () => {
         if (eventName === event_types.CHAT_CHANGED) {
             latestPromptPacket = null;
             lastPromptProbeSignature = '';
@@ -649,26 +744,26 @@ function bindEvents() {
         scheduleRefresh();
         schedulePromptPacketProbe();
     }));
-    eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
+    onExtensionEvent(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
         if (!dryRun) {
             isRealGenerationRunning = true;
         }
     });
-    eventSource.on(event_types.GENERATION_ENDED, () => {
+    onExtensionEvent(event_types.GENERATION_ENDED, () => {
         isRealGenerationRunning = false;
         if (promptProbePending) {
             promptProbePending = false;
             schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN);
         }
     });
-    eventSource.on(event_types.GENERATION_STOPPED, () => {
+    onExtensionEvent(event_types.GENERATION_STOPPED, () => {
         isRealGenerationRunning = false;
         if (promptProbePending) {
             promptProbePending = false;
             schedulePromptPacketProbe(PROMPT_PROBE_COOLDOWN);
         }
     });
-    eventSource.on(event_types.GENERATE_AFTER_DATA, (generateData) => {
+    onExtensionEvent(event_types.GENERATE_AFTER_DATA, (generateData) => {
         cachePromptPacketFromGenerateData(generateData)
             .then(() => scheduleRefresh(0))
             .catch(error => console.warn(`[${MODULE_ID}] Failed to cache prompt packet`, error));
