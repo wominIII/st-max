@@ -10,12 +10,16 @@ const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
 const PROMPT_PROBE_COOLDOWN = 4000;
 const VIEWPORT_PADDING = 8;
 const POSITION_PAGE_STEP = 32;
+const EDGE_OFFSET_STEP = 4;
 const MAX_TOKEN_STEP = 1000;
+const LONG_PRESS_DELAY = 420;
 
 const defaultSettings = {
     position: 'top',
     positionX: 16,
     positionY: 16,
+    dockSide: 'right',
+    edgeOffset: 14,
     displayStyle: 'vertical',
     contextColor: '#0a4069',
     promptColor: '#f1c40f',
@@ -38,6 +42,7 @@ let promptProbePending = false;
 let lastPromptProbeAt = 0;
 let lastPromptProbeSignature = '';
 let isRealGenerationRunning = false;
+let dragState = null;
 
 function ensureSettings() {
     if (!extension_settings[MODULE_ID]) {
@@ -47,6 +52,8 @@ function ensureSettings() {
     Object.assign(settings, defaultSettings, extension_settings[MODULE_ID]);
     settings.positionX = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     settings.positionY = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
+    settings.dockSide = ['left', 'right'].includes(settings.dockSide) ? settings.dockSide : defaultSettings.dockSide;
+    settings.edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, 0);
     settings.displayStyle = ['vertical', 'horizontal', 'verticalSlim'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
     settings.contextColor = sanitizeColor(settings.contextColor, defaultSettings.contextColor);
     settings.promptColor = sanitizeColor(settings.promptColor, defaultSettings.promptColor);
@@ -94,7 +101,6 @@ function getPromptProbeSignature() {
         String(textarea?.value || ''),
         settings.maxTokens,
         settings.contextMessages,
-        settings.displayStyle,
     ].join('|');
 }
 
@@ -169,6 +175,7 @@ function ensureWidget() {
     if (widget) {
         applyWidgetAppearance(widget);
         applyWidgetPlacement(widget);
+        bindWidgetDrag(widget);
         return widget;
     }
 
@@ -191,6 +198,7 @@ function ensureWidget() {
     `;
 
     document.body.append(widget);
+    bindWidgetDrag(widget);
     applyWidgetPlacement(widget);
     return widget;
 }
@@ -224,11 +232,17 @@ function ensureSettingsUi() {
                         <option value="verticalSlim">竖向长条</option>
                     </select>
 
-                    <label for="stctx_meter_position_x">X 坐标：<span data-role="position-x-value">0</span></label>
+                    <label for="stctx_meter_dock_side">自动吸附</label>
+                    <select id="stctx_meter_dock_side" class="text_pole">
+                        <option value="left">左侧</option>
+                        <option value="right">右侧</option>
+                    </select>
+
+                    <label for="stctx_meter_edge_offset">边距：<span data-role="edge-offset-value">0</span></label>
                     <div class="stctx-range-control">
-                        <button type="button" class="stctx-step-button" data-step-target="positionX" data-step="-${POSITION_PAGE_STEP}" aria-label="X 坐标减少">−</button>
-                        <input id="stctx_meter_position_x" class="stctx-range" type="range" min="0" step="1">
-                        <button type="button" class="stctx-step-button" data-step-target="positionX" data-step="${POSITION_PAGE_STEP}" aria-label="X 坐标增加">+</button>
+                        <button type="button" class="stctx-step-button" data-step-target="edgeOffset" data-step="-${EDGE_OFFSET_STEP}" aria-label="边距减少">−</button>
+                        <input id="stctx_meter_edge_offset" class="stctx-range" type="range" min="0" step="1">
+                        <button type="button" class="stctx-step-button" data-step-target="edgeOffset" data-step="${EDGE_OFFSET_STEP}" aria-label="边距增加">+</button>
                     </div>
 
                     <label for="stctx_meter_position_y">Y 坐标：<span data-role="position-y-value">0</span></label>
@@ -258,7 +272,7 @@ function ensureSettingsUi() {
                         <button type="button" class="stctx-step-button" data-step-target="contextMessages" data-step="1" aria-label="读取消息数增加">+</button>
                     </div>
                 </div>
-                <div class="stctx-settings-help">拖动 X/Y 滑条可以实时移动进度条。横条样式会变成很窄的长条，更适合手机输入区上方。</div>
+                <div class="stctx-settings-help">进度条会自动吸附在左侧或右侧。长按进度条后拖动：左右拖动切换吸附边，上下拖动调整高度。</div>
             </div>
         </div>
     `;
@@ -266,9 +280,10 @@ function ensureSettingsUi() {
     host.prepend(panel);
 
     const styleSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_style'));
-    const positionXInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_x'));
+    const dockSideSelect = /** @type {HTMLSelectElement | null} */ (panel.querySelector('#stctx_meter_dock_side'));
+    const edgeOffsetInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_edge_offset'));
     const positionYInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_position_y'));
-    const positionXValue = panel.querySelector('[data-role="position-x-value"]');
+    const edgeOffsetValue = panel.querySelector('[data-role="edge-offset-value"]');
     const positionYValue = panel.querySelector('[data-role="position-y-value"]');
     const contextColorInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_context_color'));
     const promptColorInput = /** @type {HTMLInputElement | null} */ (panel.querySelector('#stctx_meter_prompt_color'));
@@ -285,18 +300,27 @@ function ensureSettingsUi() {
         });
     }
 
-    if (positionXInput) {
-        positionXInput.value = String(settings.positionX);
-        if (positionXValue) {
-            positionXValue.textContent = String(settings.positionX);
+    if (dockSideSelect) {
+        dockSideSelect.value = settings.dockSide;
+        dockSideSelect.addEventListener('change', () => {
+            const value = ['left', 'right'].includes(dockSideSelect.value) ? dockSideSelect.value : defaultSettings.dockSide;
+            saveSetting('dockSide', value);
+            updateSettingsUiValues(panel);
+        });
+    }
+
+    if (edgeOffsetInput) {
+        edgeOffsetInput.value = String(settings.edgeOffset);
+        if (edgeOffsetValue) {
+            edgeOffsetValue.textContent = String(settings.edgeOffset);
         }
-        positionXInput.addEventListener('input', () => {
-            const value = sanitizeInteger(positionXInput.value, defaultSettings.positionX, 0);
-            positionXInput.value = String(value);
-            if (positionXValue) {
-                positionXValue.textContent = String(value);
+        edgeOffsetInput.addEventListener('input', () => {
+            const value = sanitizeInteger(edgeOffsetInput.value, defaultSettings.edgeOffset, 0);
+            edgeOffsetInput.value = String(value);
+            if (edgeOffsetValue) {
+                edgeOffsetValue.textContent = String(value);
             }
-            saveSetting('positionX', value);
+            saveSetting('edgeOffset', value);
         });
     }
 
@@ -357,21 +381,25 @@ function ensureSettingsUi() {
 }
 
 function updateSettingsUiValues(root = document) {
-    const positionXInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_x'));
+    const dockSideSelect = /** @type {HTMLSelectElement | null} */ (root.querySelector('#stctx_meter_dock_side'));
+    const edgeOffsetInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_edge_offset'));
     const positionYInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_y'));
-    const positionXValue = root.querySelector('[data-role="position-x-value"]');
+    const edgeOffsetValue = root.querySelector('[data-role="edge-offset-value"]');
     const positionYValue = root.querySelector('[data-role="position-y-value"]');
     const maxTokensInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_max_tokens'));
     const contextMessagesInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_context_messages'));
 
-    if (positionXInput) {
-        positionXInput.value = String(settings.positionX);
+    if (dockSideSelect) {
+        dockSideSelect.value = settings.dockSide;
+    }
+    if (edgeOffsetInput) {
+        edgeOffsetInput.value = String(settings.edgeOffset);
     }
     if (positionYInput) {
         positionYInput.value = String(settings.positionY);
     }
-    if (positionXValue) {
-        positionXValue.textContent = String(settings.positionX);
+    if (edgeOffsetValue) {
+        edgeOffsetValue.textContent = String(settings.edgeOffset);
     }
     if (positionYValue) {
         positionYValue.textContent = String(settings.positionY);
@@ -389,9 +417,9 @@ function applySettingsStep(target, step, root = document) {
         return;
     }
 
-    if (target === 'positionX' || target === 'positionY') {
-        const max = target === 'positionX'
-            ? Math.max(window.innerWidth, settings.positionX, 1)
+    if (target === 'edgeOffset' || target === 'positionY') {
+        const max = target === 'edgeOffset'
+            ? getEdgeOffsetMax()
             : Math.max(window.innerHeight, settings.positionY, 1);
         const value = clamp(sanitizeInteger(settings[target], defaultSettings[target], 0) + step, 0, max);
         saveSetting(target, value);
@@ -419,12 +447,12 @@ function scheduleSettingsUiRetry() {
 }
 
 function syncPositionSliderLimits(root = document) {
-    const xInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_x'));
+    const edgeInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_edge_offset'));
     const yInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_y'));
 
-    if (xInput) {
-        xInput.max = String(Math.max(window.innerWidth, settings.positionX, 1));
-        xInput.value = String(settings.positionX);
+    if (edgeInput) {
+        edgeInput.max = String(getEdgeOffsetMax());
+        edgeInput.value = String(settings.edgeOffset);
     }
 
     if (yInput) {
@@ -433,6 +461,10 @@ function syncPositionSliderLimits(root = document) {
     }
 
     updateSettingsUiValues(root);
+}
+
+function getEdgeOffsetMax() {
+    return Math.max(32, Math.min(160, Math.floor(window.innerWidth / 3)));
 }
 
 function clamp(value, min, max) {
@@ -634,7 +666,8 @@ async function buildStats() {
             maxTokens,
             contextMessages,
             settings.displayStyle,
-            settings.positionX,
+            settings.dockSide,
+            settings.edgeOffset,
             settings.positionY,
             promptPacket.key,
             contextTokens,
@@ -664,6 +697,7 @@ function paintStack(widget, stats) {
 
 function applyWidgetAppearance(widget) {
     widget.dataset.style = settings.displayStyle;
+    widget.dataset.dock = settings.dockSide;
     widget.style.setProperty('--stctx-context-color', settings.contextColor);
     widget.style.setProperty('--stctx-prompt-color', settings.promptColor);
 }
@@ -673,17 +707,102 @@ function applyWidgetPlacement(widget) {
     widget.dataset.style = settings.displayStyle;
     const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : settings.displayStyle === 'verticalSlim' ? 12 : 78);
     const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : settings.displayStyle === 'verticalSlim' ? 224 : 132);
-    let left = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
+    const edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, 0);
+    const dockSide = ['left', 'right'].includes(settings.dockSide) ? settings.dockSide : defaultSettings.dockSide;
     let top = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
 
     const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
     const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
 
-    left = clamp(left, VIEWPORT_PADDING, maxLeft);
+    const left = dockSide === 'left'
+        ? clamp(edgeOffset, VIEWPORT_PADDING, maxLeft)
+        : clamp(window.innerWidth - width - edgeOffset, VIEWPORT_PADDING, maxLeft);
     top = clamp(top, VIEWPORT_PADDING, maxTop);
 
     widget.style.left = `${Math.round(left)}px`;
     widget.style.top = `${Math.round(top)}px`;
+}
+
+function bindWidgetDrag(widget) {
+    if (widget.dataset.dragBound === 'true') {
+        return;
+    }
+
+    widget.dataset.dragBound = 'true';
+    const stack = widget.querySelector('[data-role="stack"]');
+    if (!stack) {
+        return;
+    }
+
+    stack.addEventListener('pointerdown', event => {
+        if (event.button !== undefined && event.button !== 0) {
+            return;
+        }
+
+        const rect = widget.getBoundingClientRect();
+        dragState = {
+            pointerId: event.pointerId,
+            started: false,
+            timer: setTimeout(() => {
+                if (!dragState || dragState.pointerId !== event.pointerId) {
+                    return;
+                }
+
+                dragState.started = true;
+                widget.classList.add('is-dragging');
+                stack.setPointerCapture?.(event.pointerId);
+                updateDraggedPlacement(widget, event.clientX, event.clientY);
+            }, LONG_PRESS_DELAY),
+            startX: event.clientX,
+            startY: event.clientY,
+            rectHeight: rect.height || 1,
+        };
+    });
+
+    stack.addEventListener('pointermove', event => {
+        if (!dragState || dragState.pointerId !== event.pointerId) {
+            return;
+        }
+
+        const moved = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
+        if (!dragState.started && moved > 12) {
+            clearTimeout(dragState.timer);
+            dragState = null;
+            return;
+        }
+
+        if (dragState.started) {
+            event.preventDefault();
+            updateDraggedPlacement(widget, event.clientX, event.clientY);
+        }
+    });
+
+    const finishDrag = event => {
+        if (!dragState || dragState.pointerId !== event.pointerId) {
+            return;
+        }
+
+        clearTimeout(dragState.timer);
+        widget.classList.remove('is-dragging');
+        stack.releasePointerCapture?.(event.pointerId);
+        dragState = null;
+    };
+
+    stack.addEventListener('pointerup', finishDrag);
+    stack.addEventListener('pointercancel', finishDrag);
+}
+
+function updateDraggedPlacement(widget, clientX, clientY) {
+    const rect = widget.getBoundingClientRect();
+    const dockSide = clientX < window.innerWidth / 2 ? 'left' : 'right';
+    const positionY = clamp(Math.round(clientY - rect.height / 2), VIEWPORT_PADDING, Math.max(VIEWPORT_PADDING, window.innerHeight - rect.height - VIEWPORT_PADDING));
+
+    settings.dockSide = dockSide;
+    settings.positionY = positionY;
+    Object.assign(extension_settings[MODULE_ID], settings);
+    saveSettingsDebounced();
+    updateSettingsUiValues();
+    applyWidgetPlacement(widget);
 }
 
 function renderStats(widget, stats) {
