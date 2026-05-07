@@ -9,8 +9,8 @@ const PROMPT_PROBE_INPUT_DEBOUNCE = 1000;
 const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
 const PROMPT_PROBE_COOLDOWN = 4000;
 const VIEWPORT_PADDING = 8;
-const POSITION_PAGE_STEP = 32;
 const EDGE_OFFSET_STEP = 4;
+const EDGE_OFFSET_MIN = -64;
 const MAX_TOKEN_STEP = 1000;
 const LONG_PRESS_DELAY = 420;
 
@@ -53,7 +53,7 @@ function ensureSettings() {
     settings.positionX = sanitizeInteger(settings.positionX, defaultSettings.positionX, 0);
     settings.positionY = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
     settings.dockSide = ['left', 'right'].includes(settings.dockSide) ? settings.dockSide : defaultSettings.dockSide;
-    settings.edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, 0);
+    settings.edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, EDGE_OFFSET_MIN);
     settings.displayStyle = ['vertical', 'horizontal', 'verticalSlim'].includes(settings.displayStyle) ? settings.displayStyle : defaultSettings.displayStyle;
     settings.contextColor = sanitizeColor(settings.contextColor, defaultSettings.contextColor);
     settings.promptColor = sanitizeColor(settings.promptColor, defaultSettings.promptColor);
@@ -241,7 +241,7 @@ function ensureSettingsUi() {
                     <label for="stctx_meter_edge_offset">边距：<span data-role="edge-offset-value">0</span></label>
                     <div class="stctx-range-control">
                         <button type="button" class="stctx-step-button" data-step-target="edgeOffset" data-step="-${EDGE_OFFSET_STEP}" aria-label="边距减少">−</button>
-                        <input id="stctx_meter_edge_offset" class="stctx-range" type="range" min="0" step="1">
+                        <input id="stctx_meter_edge_offset" class="stctx-range" type="range" step="1">
                         <button type="button" class="stctx-step-button" data-step-target="edgeOffset" data-step="${EDGE_OFFSET_STEP}" aria-label="边距增加">+</button>
                     </div>
 
@@ -315,7 +315,7 @@ function ensureSettingsUi() {
             edgeOffsetValue.textContent = String(settings.edgeOffset);
         }
         edgeOffsetInput.addEventListener('input', () => {
-            const value = sanitizeInteger(edgeOffsetInput.value, defaultSettings.edgeOffset, 0);
+            const value = sanitizeInteger(edgeOffsetInput.value, defaultSettings.edgeOffset, EDGE_OFFSET_MIN);
             edgeOffsetInput.value = String(value);
             if (edgeOffsetValue) {
                 edgeOffsetValue.textContent = String(value);
@@ -421,7 +421,8 @@ function applySettingsStep(target, step, root = document) {
         const max = target === 'edgeOffset'
             ? getEdgeOffsetMax()
             : Math.max(window.innerHeight, settings.positionY, 1);
-        const value = clamp(sanitizeInteger(settings[target], defaultSettings[target], 0) + step, 0, max);
+        const min = target === 'edgeOffset' ? EDGE_OFFSET_MIN : 0;
+        const value = clamp(sanitizeInteger(settings[target], defaultSettings[target], min) + step, min, max);
         saveSetting(target, value);
         syncPositionSliderLimits(root);
         updateSettingsUiValues(root);
@@ -451,6 +452,7 @@ function syncPositionSliderLimits(root = document) {
     const yInput = /** @type {HTMLInputElement | null} */ (root.querySelector('#stctx_meter_position_y'));
 
     if (edgeInput) {
+        edgeInput.min = String(EDGE_OFFSET_MIN);
         edgeInput.max = String(getEdgeOffsetMax());
         edgeInput.value = String(settings.edgeOffset);
     }
@@ -707,16 +709,17 @@ function applyWidgetPlacement(widget) {
     widget.dataset.style = settings.displayStyle;
     const width = widget.offsetWidth || (settings.displayStyle === 'horizontal' ? 320 : settings.displayStyle === 'verticalSlim' ? 12 : 78);
     const height = widget.offsetHeight || (settings.displayStyle === 'horizontal' ? 12 : settings.displayStyle === 'verticalSlim' ? 224 : 132);
-    const edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, 0);
+    const edgeOffset = sanitizeInteger(settings.edgeOffset, defaultSettings.edgeOffset, EDGE_OFFSET_MIN);
     const dockSide = ['left', 'right'].includes(settings.dockSide) ? settings.dockSide : defaultSettings.dockSide;
     let top = sanitizeInteger(settings.positionY, defaultSettings.positionY, 0);
 
-    const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
+    const minLeft = Math.min(EDGE_OFFSET_MIN, VIEWPORT_PADDING);
+    const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - width - EDGE_OFFSET_MIN);
     const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
 
     const left = dockSide === 'left'
-        ? clamp(edgeOffset, VIEWPORT_PADDING, maxLeft)
-        : clamp(window.innerWidth - width - edgeOffset, VIEWPORT_PADDING, maxLeft);
+        ? clamp(edgeOffset, minLeft, maxLeft)
+        : clamp(window.innerWidth - width - edgeOffset, minLeft, maxLeft);
     top = clamp(top, VIEWPORT_PADDING, maxTop);
 
     widget.style.left = `${Math.round(left)}px`;
