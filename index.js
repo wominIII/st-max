@@ -9,6 +9,7 @@ const PROMPT_PROBE_INPUT_DEBOUNCE = 1000;
 const PROMPT_PROBE_IDLE_DEBOUNCE = 450;
 const PROMPT_PROBE_COOLDOWN = 4000;
 const VIEWPORT_PADDING = 8;
+const POSITION_PAGE_STEP = 32;
 const EDGE_OFFSET_STEP = 4;
 const EDGE_OFFSET_MIN = -64;
 const MAX_TOKEN_STEP = 1000;
@@ -904,15 +905,21 @@ function bindEvents() {
     });
 }
 
-jQuery(() => {
-    ensureSettings();
-    ensureSettingsUi();
-    ensureWidget();
-    bindEvents();
-    scheduleRefresh(0);
-    schedulePromptPacketProbe(1200);
-
-    periodicTimer = setInterval(() => {
+function boot() {
+    try {
+        ensureSettings();
+        ensureSettingsUi();
+        ensureWidget();
+        bindEvents();
         scheduleRefresh(0);
-    }, REFRESH_INTERVAL);
-});
+        schedulePromptPacketProbe(1200);
+
+        periodicTimer = setInterval(() => {
+            scheduleRefresh(0);
+        }, REFRESH_INTERVAL);
+    } catch (error) {
+        console.error(`[${MODULE_ID}] Startup failed`, error);
+    }
+}
+
+jQuery(boot);
